@@ -1,0 +1,21 @@
+# NovaBank support-console theming.
+#
+# Deliberately done through config.toml rather than CSS selectors targeting
+# Streamlit internals: those class names change between releases and would
+# silently break the UI the week of the demo.
+#
+# Plan: PROJECT_PLAN.md section 13.3
+
+[theme]
+primaryColor = "#0B5FFF"
+backgroundColor = "#FFFFFF"
+secondaryBackgroundColor = "#F4F6FA"
+textColor = "#10213A"
+font = "sans serif"
+
+[server]
+headless = true
+port = 8501
+
+[browser]
+gatherUsageStats = false

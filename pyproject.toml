@@ -1,0 +1,91 @@
+[project]
+name = "life-event-financial-navigator"
+version = "0.1.0"
+description = "Non-transactional AI banking support and advisory agent that detects life events and returns policy-grounded guidance"
+readme = "README.md"
+requires-python = ">=3.11,<3.14"
+license = { text = "MIT" }
+
+# Floors are set at the majors that uv.lock actually resolved, NOT at older
+# "safe" versions. This matters: LangGraph 1.x, LangChain 1.x, Langfuse 4.x and
+# MCP 2.x all have APIs that differ from the 0.x/2.x-era tutorials you will find
+# by searching. Follow the CURRENT docs for these libraries, not blog posts.
+# uv.lock is the real pin; these floors exist to prevent an accidental downgrade
+# into an incompatible API.
+dependencies = [
+    # --- orchestration ---
+    "langgraph>=1.2",
+    "langgraph-checkpoint-sqlite>=3.1",
+    "langchain-core>=1.6",
+    "langchain-text-splitters>=1.1",
+    # --- retrieval ---
+    "langchain-chroma>=1.1",
+    "chromadb>=1.5",
+    "sentence-transformers>=6.0",
+    # --- llm ---
+    "openai>=3.13",
+    # --- contracts & config ---
+    "pydantic>=2.13",
+    "pydantic-settings>=2.15",
+    # --- a2a service ---
+    "fastapi>=0.141",
+    "uvicorn[standard]>=0.52",
+    "httpx>=0.28",
+    # --- tools ---
+    "mcp>=2.2",
+    # --- ui ---
+    "streamlit>=1.63",
+    # --- observability ---
+    "langfuse>=4.15",
+    # --- data ---
+    "pyyaml>=6.0",
+    "python-frontmatter>=1.3",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=9.1",
+    "pytest-asyncio>=1.4",
+    "ruff>=0.16",
+    "pre-commit>=4.6",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["app"]
+
+# ---------------------------------------------------------------------------
+# Tooling
+# ---------------------------------------------------------------------------
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+extend-exclude = ["data", "docs"]
+
+[tool.ruff.lint]
+select = [
+    "E",    # pycodestyle errors
+    "F",    # pyflakes
+    "I",    # isort
+    "UP",   # pyupgrade
+    "B",    # flake8-bugbear
+    "SIM",  # flake8-simplify
+]
+ignore = [
+    "E501",  # line length is handled by the formatter
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
+asyncio_mode = "auto"
+markers = [
+    "safety: guardrail tests that must be 100% green before any merge",
+    "live: hits the real LLM API and spends allowance; excluded by default",
+    "slow: loads local embedding models",
+]
+addopts = "-q --strict-markers -m 'not live'"

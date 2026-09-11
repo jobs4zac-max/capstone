@@ -1,0 +1,38 @@
+# Install once:  uv run pre-commit install
+#
+# The detect-private-key hook plus the OPENAI_API_KEY guard below exist because
+# the course brief explicitly warns about key exposure in shared repos.
+
+repos:
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v4.6.0
+    hooks:
+      - id: trailing-whitespace
+      - id: end-of-file-fixer
+      - id: check-yaml
+      - id: check-toml
+      - id: check-added-large-files
+        args: ["--maxkb=1024"]
+      - id: check-merge-conflict
+      - id: detect-private-key
+
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.6.9
+    hooks:
+      - id: ruff
+        args: [--fix]
+      - id: ruff-format
+
+  - repo: local
+    hooks:
+      - id: no-api-keys
+        name: block committed API keys
+        entry: bash -c 'if git diff --cached -U0 | grep -nE "sk-[A-Za-z0-9]{16,}"; then echo "ERROR: looks like a live API key. Use .env (gitignored)."; exit 1; fi'
+        language: system
+        pass_filenames: false
+
+      - id: no-env-file
+        name: block committing .env
+        entry: bash -c 'if git diff --cached --name-only | grep -qE "(^|/)\.env$"; then echo "ERROR: .env must never be committed."; exit 1; fi'
+        language: system
+        pass_filenames: false

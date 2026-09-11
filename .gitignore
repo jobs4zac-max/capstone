@@ -1,0 +1,77 @@
+# =============================================================================
+# Deliberately COMMITTED (do not add these here):
+#   uv.lock            - exact dependency pins; the whole point of reproducibility
+#   requirements.txt   - pip fallback, exported from uv.lock
+#   .python-version    - tells uv which interpreter to fetch
+#   .env.example       - template with no real values
+#   **/.gitkeep        - preserves empty directory structure
+# =============================================================================
+
+# --- secrets: never commit ---
+.env
+.env.local
+.env.*.local
+*.key
+*.pem
+*.p12
+credentials.json
+service-account*.json
+
+# --- course reference documents: kept locally, not in the repo ---
+# The capstone brief and the room scenario doc live on your machine only.
+# To commit an intentional deliverable anyway:  git add -f path/to/file.pdf
+*.pdf
+*.docx
+*.doc
+*.pptx
+*.xlsx
+*.zip
+
+# --- generated data ---
+data/vectorstore/
+data/cache/
+*.db
+*.sqlite
+*.sqlite3
+
+# --- python ---
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+*.egg-info/
+.eggs/
+build/
+dist/
+.ipynb_checkpoints/
+
+# --- virtualenvs / installed libraries -------------------------------------
+# Dependencies are NEVER committed. Another machine reproduces them with
+# `uv sync` (from uv.lock) or `pip install -r requirements.txt`.
+.venv/
+.venv*/
+venv/
+env/
+ENV/
+site-packages/
+node_modules/
+
+# --- tooling caches ---
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+htmlcov/
+
+# --- models downloaded at runtime ---
+.cache/
+models/
+
+# --- editors / os ---
+.DS_Store
+.idea/
+.vscode/
+*.swp
+
+# --- streamlit local secrets (we use .env instead) ---
+.streamlit/secrets.toml
