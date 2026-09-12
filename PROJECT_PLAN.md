@@ -306,11 +306,11 @@ The zones are not documentation — they are a single source of truth consumed b
 subsystems:
 
 ```
-app/guardrails/policy_zones.yaml     ← the one authoritative definition
+safety/policy_zones.yaml     ← the one authoritative definition
         │
-        ├──→ app/guardrails/intent_gate.py     (Zone C → deterministic refusal)
-        ├──→ app/guardrails/risk_rules.py      (Zone B → mandatory escalation)
-        ├──→ app/prompts/system_prompt.md      (rendered into the prompt at build time)
+        ├──→ safety/intent_gate.py     (Zone C → deterministic refusal)
+        ├──→ safety/risk_rules.py      (Zone B → mandatory escalation)
+        ├──→ agent/prompts.py      (rendered into the prompt at build time)
         └──→ tests/safety/test_zones.py        (every Zone B/C entry needs ≥1 test)
 ```
 
@@ -372,7 +372,7 @@ graph TB
         PA["Policy & Knowledge Agent"]
         CARD["/.well-known/agent-card.json"]
         RAG["RAG pipeline"]
-        VS[("Chroma<br/>vector store")]
+        VS[("FAISS<br/>index")]
     end
     subgraph MCPS["MCP server — stdio, read-only"]
         T1[get_customer_profile]
@@ -413,14 +413,14 @@ graph TB
 
 | Concept | Where it lives | What problem it solves here |
 |---|---|---|
-| **Agentic orchestration** | LangGraph state machine in `app/orchestration/` | The turn is not a linear pipeline — it branches (clarify / refuse / retrieve / escalate) and loops (re-query on insufficient evidence). A graph expresses that; a function chain does not. |
+| **Agentic orchestration** | LangGraph state machine in `agent/` | The turn is not a linear pipeline — it branches (clarify / refuse / retrieve / escalate) and loops (re-query on insufficient evidence). A graph expresses that; a function chain does not. |
 | **A2A** | Orchestrator ↔ Policy Agent over HTTP with typed envelopes + agent card | Enforces the PII boundary, and makes the knowledge capability independently addressable and independently testable. |
-| **RAG** | `app/rag/`, inside the Policy Agent service | The only defence against fabricated policy: answers must come from documents. |
-| **MCP** | `app/mcp/server.py`, stdio | Defines the agent's capability surface **out of process**, so the non-transactional boundary is structural rather than prompted. |
-| **Guardrails** | `app/guardrails/`, 4 gates | Delivers the 100% safety targets that prompting cannot. |
+| **RAG** | `retrieval/`, inside the Policy Agent service | The only defence against fabricated policy: answers must come from documents. |
+| **MCP** | `mcp_tools/server.py`, stdio | Defines the agent's capability surface **out of process**, so the non-transactional boundary is structural rather than prompted. |
+| **Guardrails** | `safety/`, 4 gates | Delivers the 100% safety targets that prompting cannot. |
 | **HITL** | LangGraph `interrupt()` + review queue + escalation packet | Turns "escalate" from a dead-end message into an auditable workflow that also produces adaptation data. |
-| **Observability** | Langfuse, `app/observability/` | Makes the evaluation report possible: per-turn latency, tokens, retrieved docs, guardrail decisions. Without it, failure analysis is guesswork. |
-| **Evaluation** | `app/evaluation/`, `tests/`, `scripts/` | Converts the 12 success criteria into pass/fail numbers, and auto-generates the required comparison tables. |
+| **Observability** | Langfuse, `monitoring/` | Makes the evaluation report possible: per-turn latency, tokens, retrieved docs, guardrail decisions. Without it, failure analysis is guesswork. |
+| **Evaluation** | `evaluation/`, `tests/`, `scripts/` | Converts the 12 success criteria into pass/fail numbers, and auto-generates the required comparison tables. |
 
 ### 4.4 Control-authority model
 
@@ -651,7 +651,7 @@ Synthetic, authored by us, clearly labelled. Target ~40–60 documents (enough f
 retrieval, small enough to curate honestly in the time available).
 
 ```
-data/policies/
+knowledge/raw/
 ├── accounts/          joint accounts, name change, account ownership, mandates
 ├── savings/           children's savings, senior savings, goal accounts
 ├── loans/             home/personal loan eligibility, hardship provisions
@@ -687,12 +687,12 @@ owner: "NovaBank Retail Policy (fictional)"
 
 ```mermaid
 graph LR
-    SRC[data/policies/**.md] --> LOAD["Loader<br/>DocumentSource protocol"]
+    SRC[knowledge/raw/**.md] --> LOAD["Loader<br/>DocumentSource protocol"]
     LOAD --> PARSE["Parse front-matter<br/>+ heading tree"]
     PARSE --> CHUNK["Chunk<br/>heading-aware, 600/100"]
     CHUNK --> META["Attach metadata<br/>doc_id, section, version,<br/>life_events, jurisdiction, status"]
     META --> EMB["Embed<br/>all-MiniLM-L6-v2, local"]
-    EMB --> VS[("Chroma<br/>persistent, ./data/vectorstore")]
+    EMB --> VS[("FAISS<br/>knowledge/faiss_index")]
     Q[Query] --> QEMB[Embed query] --> SEARCH["Similarity search<br/>+ metadata filter"]
     VS --> SEARCH --> POST["Score threshold<br/>+ dedupe by doc_id<br/>+ optional rerank"]
     POST --> CTXB["Context builder<br/>numbered, delimited,<br/>data-not-instructions"]
@@ -765,16 +765,30 @@ version and excerpt — so a grader (or a compliance analyst) can verify groundi
 
 | Option | Advantages | Disadvantages | Fit |
 |---|---|---|---|
-| **Chroma** | Embedded, no server; persists to disk; rich metadata filtering; first-class LangChain integration; trivial setup | Not built for large scale; fewer ANN tuning knobs | **Best** — matches corpus size and the "≤3 commands to set up" NFR |
-| FAISS | Fastest ANN; battle-tested | No native metadata filtering (we depend on `life_events` filtering); no document store; persistence is manual index files | Poor — loses our biggest precision lever |
-| Qdrant | Excellent filtering; production-grade; good local Docker story | Needs a running service (or in-memory mode that discards the advantage); one more thing to fail on demo day | Over-spec'd |
+| **FAISS** | Embedded, no server; fastest ANN; battle-tested; LangChain wrapper keeps a separate docstore so metadata **is** available; persists as two small files; named explicitly in both the brief and the course's recommended structure | Filtering happens *after* retrieval, so `k` must be oversampled (`fetch_k`); index files are binary | **Selected** |
+| Chroma | Native (pre-filter) metadata filtering; persists a real DB directory | Heavier dependency tree (~12 extra transitive packages); diverges from the recommended structure's `faiss_store.py` / `index.faiss` / `build_faiss_index.py` | Good, but not worth the divergence |
+| Qdrant | Excellent filtering; production-grade | Needs a running service (or in-memory mode that discards the advantage); one more thing to fail on demo day | Over-spec'd |
 | pgvector | Transactional + relational in one place | Requires Postgres; heaviest setup; no benefit at this scale | Over-spec'd |
 
-**Selected: Chroma.** Decisive reasons: (1) zero-service embedded operation protects NFR-04
-and demo reliability; (2) metadata filtering on `life_events`/`status` is load-bearing for
-both precision *and* the superseded-document rule; (3) persistence to `./data/vectorstore`
-means the demo starts instantly and offline. Isolated behind a `VectorStore` protocol
-(`search`, `upsert`, `delete_by_doc_id`, `count`) so moving to Qdrant later is one adapter.
+**Selected: FAISS.** Three reasons: (1) it is what the course's recommended structure names
+(`retrieval/faiss_store.py`, `knowledge/faiss_index/index.faiss`,
+`scripts/build_faiss_index.py`), so choosing otherwise would be the most conspicuous possible
+deviation for no functional gain; (2) zero-service embedded operation protects NFR-04 and
+demo reliability, persisting to `knowledge/faiss_index/` so the demo starts instantly and
+offline; (3) it removes ~12 transitive dependencies versus Chroma.
+
+> **Correction to an earlier draft of this plan,** which claimed FAISS "has no metadata
+> filtering" and rejected it on that basis. That is true of raw FAISS but **not** of the
+> LangChain wrapper, which maintains a separate docstore alongside the index and accepts a
+> `filter` argument. The filter is applied *after* the ANN search rather than natively, so we
+> compensate by oversampling: `retrieval_fetch_k = 24` to yield `retrieval_k = 8` after
+> filtering on `life_events` and `status`. At a ~50-document corpus the cost of that
+> oversampling is negligible, so the original objection does not survive contact with the
+> actual API.
+
+Isolated behind a `VectorStore` protocol (`search`, `upsert`, `delete_by_doc_id`, `count`).
+The protocol stays — not to hedge on FAISS, but because tests need an in-memory fake store
+(NFR-09).
 
 ### 7.5 Embeddings
 
@@ -849,7 +863,7 @@ Pydantic models are the single source of truth; MCP JSON Schemas are generated f
 the server, the client and the tests cannot drift.
 
 ```python
-# app/mcp/schemas.py  (illustrative)
+# mcp_tools/schemas.py  (illustrative)
 class AccountSummary(BaseModel):
     account_id: str = Field(pattern=r"^ACC-\d{6}$")
     type: Literal["savings", "current", "salary", "deposit", "credit_card"]
@@ -902,7 +916,7 @@ This is the question that matters, so it is answered concretely:
 A single-file `FastMCP` server is sufficient and preferable:
 
 ```
-app/mcp/
+mcp_tools/
 ├── server.py        # FastMCP instance, @mcp.tool() registrations, stdio transport
 ├── schemas.py       # Pydantic in/out models — source of truth
 ├── repository.py    # read-only JSON loader, cached, no write methods
@@ -924,7 +938,7 @@ sequenceDiagram
     participant O as Orchestrator
     participant R as Risk Agent (in-proc)
     participant P as Policy Agent (HTTP :8001)
-    participant V as Chroma
+    participant V as FAISS
 
     O->>O: build A2ARequest(trace_id, redacted context)
     O->>R: assess(message, events)  [in-proc envelope]
@@ -1152,6 +1166,34 @@ Which mechanism enforces what, and which metric it serves:
 Bold = the layer that actually provides the guarantee. Every 100% row has a bold entry
 outside the Prompt column. That single property is the safety story of this project.
 
+### 10.9 The adaptation layer must not be able to weaken safety
+
+Phase 7 requires feedback-driven behaviour change, and the recommended structure implements
+it as `policy_rlhf/policy_updater.py` writing `data/policy/policy.json`. Drawn naively, that
+is a **security hole**: if user feedback can rewrite the policy that governs refusals, then
+enough thumbs-down votes erode the Zone B/C boundaries and four of the five 100% criteria
+become unenforceable. It is the same failure the risk ratchet (§4.5) exists to prevent, just
+moved from inference time to training time.
+
+Resolved by splitting the policy into two files with different mutability:
+
+| File | Contains | Who may change it |
+|---|---|---|
+| `safety/policy_zones.yaml` | Zone A/B/C boundaries, forbidden tool names, the adaptive allowlist | **A human, via a reviewed commit.** Never written at runtime |
+| `data/policy/policy.json` | Clarification threshold, retrieval preferences, approved exemplars, response style | `policy_rlhf/policy_updater.py` at runtime |
+
+Three enforcement rules:
+
+1. **Allowlist.** `policy_zones.yaml → adaptive_allowlist` enumerates the only keys the
+   adaptive layer may touch. `policy_rlhf/policy_checker.py` rejects anything else.
+2. **Tighten-only.** An update may make the agent *more* cautious (lower the clarification
+   threshold, demote a document, add a hedge) but never less. Loosening requires a commit.
+3. **Test-enforced.** `tests/unit/test_skeleton.py` already asserts that no refusal boundary
+   has leaked into `policy.json`; `tests/safety/` (T-076) asserts the updater cannot loosen.
+
+This is worth writing up in the engineering justification: it is a case where the obvious
+implementation of a required feature would have broken a required guarantee.
+
 ---
 
 ## 11. HITL Design
@@ -1207,7 +1249,7 @@ restarting. That is what makes the HITL design genuinely useful rather than deco
 LangGraph `interrupt()` at the escalation node. The checkpointer persists the paused state, so
 a reviewer decision can resume the same thread with full context — this is precisely why
 LangGraph was chosen over CrewAI (§14.2). Queue is a SQLite table (`escalations`); the
-reviewer surface is a second Streamlit page (`frontend/pages/2_Review_Queue.py`) with
+reviewer surface is a second Streamlit page (`deployment/pages/2_Review_Queue.py`) with
 approve / annotate / reject actions.
 
 ### 11.4 What the user sees
@@ -1245,11 +1287,18 @@ criterion.
 For a 2-week timeline: start on Langfuse **cloud free tier** (no Docker), keep self-hosting as
 an optional enhancement. Either way the integration code is identical.
 
+**Both are implemented.** The course's recommended structure names
+`monitoring/langfuse_logger.py` *and* `monitoring/langsmith_tracer.py`, and our `Tracer`
+protocol (§12.2) makes a second backend nearly free. Division of labour: Langfuse is primary
+and carries the full trace tree including the non-LangChain spans; LangSmith is enabled
+optionally for LangGraph step introspection during debugging. Neither may break the request
+path — both sit behind the same exception-guarded protocol, falling back to `NullTracer`.
+
 ### 12.2 Non-negotiable: tracing must never break the request
 
 Tracing is wrapped so that any failure — network, auth, quota, Langfuse down — degrades to a
 **no-op** and the turn still completes. A tracer that can break a demo is worse than no tracer.
-`app/observability/tracer.py` exposes a `Tracer` protocol with `LangfuseTracer` and
+`monitoring/tracer.py` exposes a `Tracer` protocol with `LangfuseTracer` and
 `NullTracer`; `OBSERVABILITY_ENABLED=false` selects the latter, and every call site is
 exception-guarded.
 
@@ -1274,7 +1323,7 @@ exception-guarded.
 
 Defence in depth again — redaction is not left to discipline:
 
-1. **Redact at the boundary.** A single `app/observability/redaction.py` is the only path to
+1. **Redact at the boundary.** A single `monitoring/redaction.py` is the only path to
    any sink (Langfuse, stdout, audit file). Nothing logs directly.
 2. **Structural minimisation.** Tools return minimal fields (§8.3), so most PII never exists
    in the process.
@@ -1399,9 +1448,9 @@ reproducibility for the team, and a grader who only knows pip is never blocked.
 
 ```bash
 # Primary path
-uv sync && uv run streamlit run frontend/app.py
+uv sync && uv run streamlit run deployment/app.py
 # Fallback path
-pip install -r requirements.txt && streamlit run frontend/app.py
+pip install -r requirements.txt && streamlit run deployment/app.py
 # Keep the fallback honest (CI-enforced)
 uv export --no-hashes --format requirements-txt > requirements.txt
 ```
@@ -1418,7 +1467,7 @@ Python **3.11+** (mature `StrEnum`, `tomllib`, good typing ergonomics; avoids 3.
 | LlamaIndex agents | Strong RAG primitives | Retrieval-centric; weaker control-flow and HITL story | Partial |
 | AutoGen | Rich multi-agent conversation | Conversation-centric autonomy; heavy for this | Poor |
 
-**Selected: LangGraph** (with LangChain components for splitters, Chroma integration and
+**Selected: LangGraph** (with LangChain components for splitters, FAISS integration and
 embedding wrappers — so **Track A is satisfied** unambiguously).
 
 The decisive argument is timeline arithmetic. Two *required* capabilities — Phase 6
@@ -1436,7 +1485,7 @@ Three processes, because each boundary earns its keep:
 ```
 ┌──────────────────────────────┐      ┌────────────────────────────┐
 │ Streamlit app :8501          │      │ Policy Agent svc :8001     │
-│  frontend/ + app/ core       │─HTTP→│  FastAPI + RAG + Chroma    │
+│  deployment/ + core pkgs       │─HTTP→│  FastAPI + RAG + FAISS    │
 │  Orchestrator, Risk, Gates   │ A2A  │  agent card                │
 └──────────┬───────────────────┘      └────────────────────────────┘
            │ stdio (MCP)
@@ -1461,7 +1510,7 @@ Pydantic `BaseSettings`, one typed settings object, validated at startup. Fail f
 on a missing key rather than mid-demo.
 
 ```python
-# app/config/settings.py  (illustrative)
+# deployment/config.py  (illustrative)
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
@@ -1480,7 +1529,7 @@ class Settings(BaseSettings):
 
     # --- Vector store ---
     vector_store: Literal["chroma", "qdrant"] = "chroma"
-    vector_store_path: Path = Path("./data/vectorstore")
+    vector_store_path: Path = Path("./knowledge/faiss_index")
     collection_name: str = "novabank_policies"
 
     # --- Retrieval ---
@@ -1519,12 +1568,12 @@ settings = Settings()   # import once; never call os.getenv elsewhere
 ```
 
 **Access rule:** `from app.config import settings`. A lint test asserts `os.getenv` appears
-nowhere outside `app/config/` — config drift is the classic source of "works on my machine"
+nowhere outside `deployment/` — config drift is the classic source of "works on my machine"
 failures, and this makes it structurally impossible.
 
 ### 15.2 Secrets
 
-`.gitignore`: `.env`, `.env.local`, `*.key`, `data/vectorstore/`, `data/cache/`, `*.db`.
+`.gitignore`: `.env`, `.env.local`, `*.key`, `knowledge/faiss_index/`, `data/cache/`, `*.db`.
 Committed: `.env.example` with every key present and **no real values**.
 
 ```bash
@@ -1561,8 +1610,15 @@ allowance mid-demo is a 30-second recovery, not a failure.
 ### 16.1 Layout
 
 ```
+knowledge/                    # the RAG corpus and its derived artefacts
+├── raw/                      # policy documents (§7.1) — pdf + markdown
+├── processed/chunks.json     # inspectable intermediate, generated
+└── faiss_index/              # index.faiss + index.pkl, generated
+
 data/
-├── policies/                 # RAG corpus (§7.1) — markdown + front-matter
+├── policy/policy.json        # ADAPTIVE params only — RLHF may write this
+├── rlhf/feedback_store.json  # ratings + reviewer annotations, PII-free
+├── evaluation/test_cases.json  # ~55 eval cases
 ├── customers/
 │   ├── customers.json        # 8–12 synthetic customers
 │   └── accounts.json         # 2–4 accounts each
@@ -1573,9 +1629,13 @@ data/
 │   └── transactions.json     # status-only records; no amounts exposed by tools
 ├── procedures/
 │   └── required_documents.json
-├── vectorstore/              # generated, gitignored
 └── cache/                    # LLM record/replay cache, gitignored
 ```
+
+> **Two policy files, deliberately.** `safety/policy_zones.yaml` is the immutable
+> safety floor, changed only by a reviewed commit. `data/policy/policy.json` holds
+> adaptive parameters the RLHF layer may rewrite at runtime. The split exists so
+> feedback can never erode a refusal boundary — see §10.8 and §18.2.
 
 ### 16.2 Personas designed for testability
 
@@ -1615,122 +1675,162 @@ paths and fails if any exist. This makes §8.3's structural guarantees durable a
 
 ## 17. Codebase Structure
 
+Flat top-level packages, matching the course's recommended project structure
+(`code-structure-expected.structure`) so a grader finds exactly what they expect.
+
 ```
-life-event-financial-navigator/
-├── README.md                       # what it is, 3-command setup, demo script, synthetic-data notice
+capstone/
+├── README.md
 ├── PROJECT_PLAN.md                 # this document — source of truth
-├── pyproject.toml                  # deps + tool config (ruff, pytest, mypy)
+├── pyproject.toml                  # deps + tool config (ruff, pytest)
 ├── uv.lock
-├── requirements.txt                # generated from uv.lock, for portability
+├── requirements.txt                # generated from uv.lock, for the pip path
+├── .python-version                 # 3.12 — uv fetches it
 ├── .env.example
 ├── .gitignore
 ├── .pre-commit-config.yaml
 │
-├── app/
-│   ├── config/                     # Settings (§15) — the ONLY place env vars are read
-│   ├── agents/
-│   │   ├── orchestrator.py         # LangGraph graph definition + nodes
-│   │   ├── policy_agent.py         # Policy & Knowledge Agent logic (served over A2A)
-│   │   ├── risk_agent.py           # rules + LLM advisory + ratchet
-│   │   ├── life_event_detector.py  # structured-output classifier node (not an agent)
-│   │   ├── composer.py             # response composition
-│   │   └── contracts.py            # AgentRequest/Response, ConversationState, enums
-│   ├── orchestration/
-│   │   ├── graph.py                # StateGraph wiring, conditional edges
-│   │   ├── state.py                # Pydantic ConversationState
-│   │   ├── checkpointer.py         # SqliteSaver setup (Phase-6 memory)
-│   │   └── planner.py              # bounded sub-question decomposition
-│   ├── a2a/
-│   │   ├── envelope.py             # A2ARequest/A2AResponse/A2AContext (§9.2)
-│   │   ├── client.py               # HTTP + inproc transports behind one interface
-│   │   ├── server.py               # FastAPI app exposing the Policy Agent
-│   │   └── agent_card.py           # /.well-known/agent-card.json
-│   ├── rag/
-│   │   ├── sources.py              # DocumentSource protocol (md today; pdf/html later)
-│   │   ├── ingest.py               # parse -> chunk -> metadata -> embed -> upsert
-│   │   ├── chunking.py             # heading-aware splitter
-│   │   ├── embeddings.py           # Embedder protocol + local/OpenAI impls
-│   │   ├── store.py                # VectorStore protocol + Chroma impl
-│   │   ├── retriever.py            # search + filter + threshold + dedupe
-│   │   ├── rerank.py               # Reranker protocol (stub, flag-gated)
-│   │   └── context_builder.py      # delimited, data-not-instructions context (§7.2)
-│   ├── mcp/                        # server.py, client.py, schemas.py, repository.py, allowlist.py
-│   ├── guardrails/
-│   │   ├── policy_zones.yaml       # single source of truth for Zones A/B/C (§3.4)
-│   │   ├── gate_input.py           # Gate 0
-│   │   ├── intent_gate.py          # Zone-C deterministic refusal
-│   │   ├── risk_rules.py           # Zone-B rules + ratchet
-│   │   ├── gate_evidence.py        # Gate 2
-│   │   ├── gate_output.py          # Gate 3 orchestration
-│   │   ├── citation_validator.py   # the core anti-hallucination control
-│   │   ├── pii.py                  # detection + redaction patterns
-│   │   ├── injection.py            # injection scanning (all 3 surfaces)
-│   │   └── templates.py            # refusal / uncertainty / escalation templates
-│   ├── hitl/                       # escalation packet builder, queue (SQLite), review API
-│   ├── adaptation/                 # feedback store, signal extraction, behaviour adjustment
-│   ├── observability/              # tracer protocol, Langfuse impl, NullTracer, redaction sink
-│   ├── evaluation/
-│   │   ├── cases.py                # TestCase model + YAML loader
-│   │   ├── checkers.py             # composable assertions (§19.2)
-│   │   ├── runner.py               # execute suite -> results
-│   │   ├── metrics.py              # the 12 success criteria
-│   │   └── report.py               # markdown/HTML report emitter
-│   ├── llm/
-│   │   ├── client.py               # provider-agnostic chat client
-│   │   ├── cache.py                # record/replay cache (cost + determinism)
-│   │   └── prompts/                # versioned prompt files (v1/, v2/, v3/)
-│   └── variants/                   # the capability ladder (§18.2) — v1..v6 behind one protocol
+├── docs/                           # the five graded deliverables, exact names
+│   ├── problem_framing.md
+│   ├── demo_script.md
+│   ├── prompt_comparison_table.md  # GENERATED by scripts/compare_prompts.py
+│   ├── evaluation_report.md        # metrics generated, narrative written
+│   ├── engineering_justification.md
+│   └── evidence/                   # screenshots, trace exports, run logs
 │
-├── data/                           # §16
-├── frontend/
-│   ├── app.py                      # 1_Chat
-│   └── pages/                      # 2_Review_Queue.py, 3_Eval_Dashboard.py
+├── skills/
+│   └── SKILL.md                    # declarative capability card
+│
+├── knowledge/                      # the RAG corpus and its derived artefacts
+│   ├── raw/                        # synthetic policy documents (pdf + md)
+│   ├── processed/chunks.json       # inspectable intermediate — generated
+│   └── faiss_index/                # index.faiss + index.pkl — generated
+│
+├── data/
+│   ├── policy/policy.json          # ADAPTIVE params only; RLHF may write this
+│   ├── rlhf/feedback_store.json    # ratings + reviewer annotations, PII-free
+│   ├── evaluation/test_cases.json  # ~55 cases
+│   ├── customers/ products/ transactions/ procedures/   # mock context
+│   └── cache/                      # LLM record/replay — generated
+│
+├── agent/
+│   ├── core_agent.py               # primary entry point
+│   ├── prompts.py                  # versioned prompts + templates
+│   ├── memory.py                   # conversation state, retention/reset
+│   ├── planner.py                  # bounded sub-question decomposition
+│   ├── contracts.py  state.py  graph.py            # FROZEN contracts + graph
+│   ├── orchestrator.py  policy_agent.py  risk_agent.py
+│   ├── life_event_detector.py  composer.py         # non-agent nodes
+│   └── variants/                   # capability ladder v1..v6  (§18.2)
+│
+├── retrieval/
+│   ├── document_loader.py          # DocumentSource protocol (pdf, md)
+│   ├── chunker.py                  # heading-aware splitter
+│   ├── embedder.py                 # Embedder protocol + local MiniLM
+│   ├── faiss_store.py              # build / persist / load / search
+│   ├── retriever.py                # filter, threshold, dedupe
+│   ├── context_builder.py          # data-not-instructions framing
+│   └── rerank.py                   # stub, flag-gated
+│
+├── tools/
+│   ├── tool_registry.py            # the auditable capability list
+│   ├── tool_search.py              # policy retrieval as a callable tool
+│   └── tool_escalate.py            # hand off to the review queue
+│
+├── mcp_tools/                      # NOT `mcp/` — would shadow the mcp SDK
+│   ├── server.py                   # FastMCP, stdio, read-only tools only
+│   ├── client.py                   # allowlist, validation, audit, timeout
+│   ├── schemas.py  repository.py  allowlist.py
+│
+├── safety/                         # owns every 100% criterion  (§10)
+│   ├── policy_zones.yaml           # IMMUTABLE safety floor
+│   ├── guardrails.py               # gate orchestration, Gates 0→3
+│   ├── pii_filter.py
+│   ├── gate_input.py  intent_gate.py  risk_rules.py
+│   ├── gate_evidence.py  gate_output.py
+│   ├── citation_validator.py       # core anti-hallucination control
+│   ├── injection.py  templates.py
+│
+├── policy_rlhf/                    # Phase 7 adaptation  (§18.2)
+│   ├── policy_checker.py           # validates policy.json vs the safety floor
+│   ├── feedback_collector.py
+│   ├── policy_updater.py           # may TIGHTEN only, never loosen
+│   └── signals.py
+│
+├── monitoring/
+│   ├── tracer.py                   # protocol + NullTracer fallback
+│   ├── langfuse_logger.py          # primary: A2A, MCP and gate spans too
+│   ├── langsmith_tracer.py         # secondary: LangGraph internals
+│   ├── redaction.py                # the single sink
+│   └── log_files.py                # writes logs/*.log
+│
+├── evaluation/
+│   ├── test_harness.py  metrics.py  cases.py  checkers.py  report.py
+│
+├── hitl/                           # escalation packets, queue, review  (§11)
+│   ├── packet.py  queue.py  review.py
+│
+├── a2a/                            # EXTENSION — not in the recommended
+│   ├── envelope.py                 # structure; justified in §9.4
+│   ├── client.py  server.py  agent_card.py
+│
+├── llm/
+│   ├── client.py                   # OpenAI-compatible; Vocareum by default
+│   ├── cache.py                    # record/replay
+│   └── prompts/v1 v2 v3/           # versioned prompt files
+│
+├── deployment/
+│   ├── app.py                      # Streamlit support console
+│   └── config.py                   # Settings — the ONLY env-var reader
+│
+├── logs/                           # interactions, mcp_events,
+│                                   # policy_change, errors
 ├── tests/
-│   ├── unit/                       # chunking, redaction, citation validator, envelopes
-│   ├── integration/                # graph paths, MCP round-trip, A2A round-trip
-│   ├── safety/                     # the 100% suite — must be 100% green
-│   └── evaluation/                 # YAML cases + metric-threshold assertions
-├── scripts/
-│   ├── dev.sh                      # start all three processes
-│   ├── ingest.py                   # build the vector store
-│   ├── validate_data.py            # referential integrity + PII scan
-│   ├── run_eval.py                 # --variant --replay -> metric table
-│   ├── compare_prompts.py          # -> required prompt-comparison table
-│   ├── compare_variants.py         # -> phase-by-phase before/after evidence
-│   └── demo.py                     # forced demo script, deterministic
-└── docs/                           # graded artefacts
-    ├── 01_problem_framing.md
-    ├── 02_demo_script.md
-    ├── 03_prompt_comparison.md      # generated
-    ├── 04_evaluation_report.md      # generated + narrative
-    ├── 05_engineering_justification.md
-    └── evidence/                    # screenshots, trace exports, run logs
+│   ├── unit/  integration/  safety/  evaluation/
+│
+└── scripts/
+    ├── ingest_documents.py  build_faiss_index.py  start_mcp_server.py
+    ├── run_agent.py  run_evaluation.py  run_rlhf_pipeline.py
+    ├── compare_prompts.py  compare_variants.py
+    └── validate_data.py  export_tasks.py  dev.sh
 ```
 
 ### 17.1 Directory responsibilities
 
 | Directory | Responsibility | Owner |
 |---|---|---|
-| `app/config/` | Typed settings; the only reader of env vars | M1 |
-| `app/agents/` | The three agents + non-agent nodes + shared contracts | M1 |
-| `app/orchestration/` | Graph, state, checkpointing, bounded planning | M1 |
-| `app/a2a/` | Envelopes, transports, Policy Agent service, agent card | M1 |
-| `app/rag/` | Ingestion -> retrieval -> context construction | M2 |
-| `app/mcp/` | Read-only tool surface + client guards | M1 + M2 |
-| `app/guardrails/` | Zones, four gates, redaction, injection, templates | M2 + M3 |
-| `app/hitl/` | Escalation packets, queue, review flow | M1 |
-| `app/adaptation/` | Feedback storage -> behaviour change | M2 |
-| `app/observability/` | Tracing + redaction sink | M3 |
-| `app/evaluation/` | Cases, checkers, runner, metrics, reports | M3 |
-| `app/llm/` | Provider client, cache, versioned prompts | M2 |
-| `app/variants/` | Capability ladder for phase evidence | M3 |
-| `data/` | Synthetic corpus + mock records | M2 |
-| `frontend/` | Streamlit chat, review queue, eval dashboard | M1 + M3 |
+| `docs/` | The five graded deliverables | all |
+| `skills/` | Declarative capability card | M2 |
+| `knowledge/` | Source corpus + chunks + FAISS index | M2 |
+| `data/` | Adaptive policy, feedback, eval cases, mock context | M2 |
+| `agent/` | Core agent, prompts, memory, planner, specialists | M1 |
+| `retrieval/` | Load → chunk → embed → index → retrieve → context | M2 |
+| `tools/` | Callable tool surface + registry | M1 |
+| `mcp_tools/` | Read-only MCP server and guarded client | M1 + M2 |
+| `safety/` | Zones, four gates, redaction, injection, templates | M2 + M3 |
+| `policy_rlhf/` | Feedback → bounded behaviour change | M2 |
+| `monitoring/` | Tracing, redaction sink, log files | M3 |
+| `evaluation/` | Harness, checkers, metrics, reports | M3 |
+| `hitl/` | Escalation packets, queue, review flow | M1 |
+| `a2a/` | Envelopes, transports, Policy Agent service | M1 |
+| `llm/` | Provider client, cache, versioned prompts | M2 |
+| `deployment/` | Streamlit app + typed settings | M1 + M3 |
+| `logs/` | Local file logging, PII-redacted | M3 |
 | `tests/safety/` | The suite that must never be red | M3 |
 | `scripts/` | Reproducible entry points for every artefact | all |
-| `docs/` | The five graded deliverables | all |
 
----
+### 17.2 Deviations from the recommended structure
+
+Two, both recorded in `docs/engineering_justification.md`:
+
+| Deviation | Reason |
+|---|---|
+| `mcp_tools/` instead of `mcp/` | **Forced, not preferred.** A local `mcp/` package shadows the installed `mcp` SDK — `import mcp` would resolve to our directory and break every SDK import in the process. A smoke test asserts no `mcp/` directory exists. |
+| `a2a/` added | A2A does not appear in the recommended structure at all. We keep it as a justified extension (§9.4) and it remains first on the descoping list (§20.5, item 3). |
+
+Additions *within* expected directories (extra files in `safety/`, `agent/`,
+`monitoring/`, `retrieval/`) are supersets, not deviations — every expected filename is
+present.
 
 ## 18. MVP / Vertical Slice
 
@@ -1749,7 +1849,7 @@ One path, end to end, no breadth:
 
 **Vertical-slice scope (target: end of Day 3).**
 
-In: ~8 marriage policy documents; local embeddings + Chroma; one LLM call for detection, one
+In: ~8 marriage policy documents; local embeddings + FAISS; one LLM call for detection, one
 for composition; a 3-node LangGraph; citation rendering; CLI entry point. Out: MCP, A2A over
 HTTP, guardrails beyond a hardcoded transactional refusal, memory, HITL, adaptation, Langfuse,
 Streamlit.
@@ -1898,7 +1998,7 @@ remediation note. All green → **GREEN**.
 
 **Regression strategy.**
 - `tests/safety/` runs on every commit in **replay mode** — free, deterministic, < 90 s.
-- The LLM cache (`app/llm/cache.py`) keys on `(model, prompt_version, messages_hash,
+- The LLM cache (`llm/cache.py`) keys on `(model, prompt_version, messages_hash,
   temperature)`; `--replay` fails loudly on a cache miss rather than silently calling the API,
   so a prompt change cannot quietly invalidate the evidence.
 - Golden snapshots of full responses for the demo cases; a diff is a reviewable event, not an
@@ -1979,7 +2079,7 @@ baseline (Phase-2 evidence); LLM client + cache; NullTracer; CI running ruff + p
 **M1 — RAG prototype (Days 2–3)**
 *Goal:* grounded retrieval with real citations.
 *Tasks:* author ~25 documents across marriage / new child / job change with full front-matter;
-`DocumentSource`; front-matter validation; heading-aware chunking; local embedder; Chroma store
+`DocumentSource`; front-matter validation; heading-aware chunking; local embedder; FAISS store
 behind `VectorStore`; retriever with metadata filter + threshold + dedupe; `context_builder`
 with data-not-instructions framing; `scripts/ingest.py`; retrieval-quality mini-eval.
 *Deliverables:* populated vector store; retrieval report (recall@5 on ~15 labelled queries).
@@ -2106,7 +2206,7 @@ inter-agent · `GRD` guardrails · `HIT` human-in-the-loop · `OBS` observabilit
 | T-014 | M1 | RAG | `DocumentSource` protocol + markdown loader | Pluggable ingestion | M2 | T-013 | P0 |
 | T-015 | M1 | RAG | Heading-aware chunker + unit tests | Chunker | M2 | T-014 | P0 |
 | T-016 | M1 | RAG | `Embedder` protocol + local MiniLM impl | Embedder | M2 | T-002 | P0 |
-| T-017 | M1 | RAG | `VectorStore` protocol + Chroma impl | Store | M2 | T-016 | P0 |
+| T-017 | M1 | RAG | `VectorStore` protocol + FAISS impl | Store | M2 | T-016 | P0 |
 | T-018 | M1 | RAG | Retriever: filter + threshold + dedupe | Retriever | M2 | T-017 | P0 |
 | T-019 | M1 | RAG | `context_builder` with data-not-instructions framing | Safe context | M2 | T-018 | P0 |
 | T-020 | M1 | RAG | `scripts/ingest.py` (idempotent, checksum-based) | Ingestion CLI | M2 | T-014..T-017 | P0 |
@@ -2230,7 +2330,7 @@ their own submission zip.
 
 | Trade-off | Chose | Gave up | Why |
 |---|---|---|---|
-| Chroma vs Qdrant | Embedded simplicity | Production-grade filtering/scale | NFR-04 and demo reliability matter more at this size |
+| FAISS vs Chroma/Qdrant | Embedded simplicity + structural alignment | Native pre-filtering | Post-filter oversampling is free at ~50 docs; matching the expected layout is worth more |
 | Local vs API embeddings | Zero cost, offline | Marginal quality | \$0.25 allowance; corpus is small and pre-filtered |
 | Streamlit vs React | Days of build time | UI polish and realism | Graded on safety and evidence, not CSS |
 | LangGraph vs plain Python | Free memory + HITL | Some framework opacity | Two required capabilities, ~2 days saved |
@@ -2252,14 +2352,14 @@ their own submission zip.
 | Agent framework | **LangGraph** (LangChain family → Track A) | Branching turn flow, plus checkpointer memory and `interrupt()` HITL — two required capabilities, nearly free |
 | LLM provider | **OpenAI-compatible via Vocareum** (`gpt-4o-mini`, temp 0) | Course-provided, zero personal cost, config-swappable to a personal key |
 | Embeddings | **`all-MiniLM-L6-v2`, local** | Free and offline under a \$0.25 allowance; no dependency on proxy `/embeddings` |
-| Vector store | **Chroma** (embedded, persistent) | Zero-service setup + metadata filtering that we actually depend on |
-| RAG | **LangChain components + our own pipeline** | Splitters and the Chroma integration are worth reusing; retrieval policy is ours because grounding is the graded property |
+| Vector store | **FAISS** (embedded, persisted to `knowledge/faiss_index/`) | Zero-service setup; matches the recommended structure; metadata filtering via the LangChain docstore with `fetch_k` oversampling |
+| RAG | **LangChain components + our own pipeline** | Splitters and the FAISS integration are worth reusing; retrieval policy is ours because grounding is the graded property |
 | MCP | **`mcp` SDK / `FastMCP`, stdio** | Makes the non-transactional boundary structural and enumerable |
 | A2A | **FastAPI + Pydantic envelopes + agent card** | One real boundary that doubles as the PII boundary |
 | Backend | **Python package + FastAPI service** | Minimal moving parts; the service exists for a reason, not for symmetry |
 | Frontend | **Streamlit** (multipage) | Chat + panels + reviewer queue at near-zero build cost |
 | Guardrails | **Hand-written deterministic gates** | Only code can deliver 100% targets; an off-the-shelf library would not know our Zones |
-| Observability | **Langfuse** (cloud free tier; self-host optional) | Traces our non-LangChain spans too, and keeps conversation content local if needed |
+| Observability | **Langfuse** primary + **LangSmith** secondary | Langfuse traces our non-LangChain spans (A2A, MCP, gates) and can self-host; LangSmith covers LangGraph internals. Both are named in the recommended structure |
 | Memory | **LangGraph `SqliteSaver`** | Durable multi-turn state and resumable escalations, no extra infrastructure |
 | Persistence | **SQLite** (checkpoints, escalations, feedback) | One file, zero setup, fully portable |
 | Testing | **pytest** (+ `pytest-asyncio`) | Standard; the safety suite is the merge gate |
@@ -2273,10 +2373,10 @@ their own submission zip.
 |---|---|---|
 | CrewAI | Autonomous peer delegation fights deterministic gating; no native HITL interrupt | LangGraph |
 | Flowise | Cannot run in Vocareum; JSON export is poor evidence; awkward for eval/adaptation | Code |
-| Qdrant / pgvector | Extra service for no benefit at ~50 docs | Chroma |
-| FAISS | No metadata filtering — loses our main precision lever | Chroma |
+| Qdrant / pgvector | Extra service for no benefit at ~50 docs | FAISS |
+| Chroma | Native pre-filtering is nicer, but ~12 extra transitive deps and it diverges from the recommended `faiss_store.py` / `index.faiss` layout | FAISS |
 | React frontend | Days of work for cosmetic gain | Streamlit |
-| LangSmith | Blind spots around FastAPI/MCP/guardrail spans; no self-host | Langfuse |
+| LangSmith *as the only tracer* | Blind spots around FastAPI/MCP/guardrail spans; no self-host. Kept as a **secondary** tracer, not the primary | Langfuse primary |
 | Redis / Postgres | Nothing needs them at this scale | SQLite |
 | Docker Compose (required) | One more failure mode on demo day | `scripts/dev.sh`; Docker optional |
 | Cross-encoder reranker (MVP) | Unmeasured gain, real cost | Metadata filter + threshold |
@@ -2335,6 +2435,8 @@ criteria each owned by deterministic code, structurally enforced where possible;
 | C-02 | Does LangGraph count as "LangChain" for Track A? | We believe clearly yes (same project family, and we use LangChain components directly), but confirming removes any grading ambiguity |
 | C-03 | Is the capstone GenAI allowance larger than the practice-task \$0.25? | Determines how many live evaluation runs we can afford |
 | C-04 | Is a local deployment with logging/tracing sufficient for Phase 8, or is a hosted URL expected? | Affects whether the roadmap needs a deployment task |
+| C-05 | What format is expected for `skills/SKILL.md`? The recommended structure names the file but not its contents. | We have written it as a declarative capability card. If the course expects a different convention, the content transfers but the framing changes |
+| C-06 | Is `agent/core_agent.py` (singular) intended to mean a **single** agent? The recommended structure has no multi-agent or A2A directories. | We keep three agents (§4.1) and one A2A boundary (§9.4) as justified elaborations. If a strictly single-agent implementation is required, §20.5 already describes the collapse path |
 
 ---
 

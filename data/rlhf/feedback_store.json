@@ -1,0 +1,12 @@
+{
+  "_comment": [
+    "Feedback captured from users (thumbs up/down) and human reviewers",
+    "(escalation annotations). Drives Phase 7 adaptation.",
+    "PII-FREE by construction: entries reference an opaque session token, never",
+    "a customer_id, and free text passes through safety/pii_filter.py first.",
+    "tests/safety/ asserts no PII reaches this file.",
+    "Plan: PROJECT_PLAN.md section 18.2, task T-075"
+  ],
+  "version": 1,
+  "entries": []
+}

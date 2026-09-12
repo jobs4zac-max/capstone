@@ -4,6 +4,8 @@
 #   requirements.txt   - pip fallback, exported from uv.lock
 #   .python-version    - tells uv which interpreter to fetch
 #   .env.example       - template with no real values
+#   knowledge/raw/**   - the RAG source corpus, including PDFs (see negation below)
+#   data/policy/policy.json, data/rlhf/feedback_store.json - seed state
 #   **/.gitkeep        - preserves empty directory structure
 # =============================================================================
 
@@ -18,7 +20,6 @@ credentials.json
 service-account*.json
 
 # --- course reference documents: kept locally, not in the repo ---
-# The capstone brief and the room scenario doc live on your machine only.
 # To commit an intentional deliverable anyway:  git add -f path/to/file.pdf
 *.pdf
 *.docx
@@ -27,9 +28,22 @@ service-account*.json
 *.xlsx
 *.zip
 
-# --- generated data ---
-data/vectorstore/
+# ...BUT the RAG source corpus must be committed, or nobody can rebuild the
+# index. Negations must come after the broad pattern above.
+!knowledge/raw/**/*.pdf
+!knowledge/raw/**/*.docx
+
+# --- generated retrieval artefacts -----------------------------------------
+# Rebuild with: scripts/ingest_documents.py then scripts/build_faiss_index.py
+# NOTE: before submission, consider `git add -f knowledge/faiss_index/*` so a
+# grader can run the demo without downloading the embedding model first.
+knowledge/processed/chunks.json
+knowledge/faiss_index/*.faiss
+knowledge/faiss_index/*.pkl
+
+# --- runtime state ---
 data/cache/
+logs/*.log
 *.db
 *.sqlite
 *.sqlite3

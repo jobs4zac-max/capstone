@@ -4,7 +4,7 @@
 aiohappyeyeballs==2.7.1
     # via aiohttp
 aiohttp==3.14.3
-    # via kubernetes
+    # via langchain-community
 aiosignal==1.4.0
     # via aiohttp
 aiosqlite==0.22.1
@@ -35,15 +35,10 @@ attrs==26.1.0
     #   referencing
 backoff==2.2.1
     # via langfuse
-bcrypt==5.0.0
-    # via chromadb
-build==1.6.1
-    # via chromadb
 certifi==2026.7.22
     # via
     #   httpcore
     #   httpx
-    #   kubernetes
     #   requests
 cffi==2.1.1 ; platform_python_implementation != 'PyPy'
     # via cryptography
@@ -51,10 +46,6 @@ cfgv==3.5.0
     # via pre-commit
 charset-normalizer==3.5.1
     # via requests
-chromadb==1.5.9
-    # via
-    #   langchain-chroma
-    #   life-event-financial-navigator
 click==8.5.0
     # via
     #   huggingface-hub
@@ -62,9 +53,8 @@ click==8.5.0
     #   uvicorn
 cloudpickle==3.1.2
     # via joblib
-colorama==0.4.6 ; os_name == 'nt' or sys_platform == 'win32'
+colorama==0.4.6 ; sys_platform == 'win32'
     # via
-    #   build
     #   pytest
     #   tqdm
     #   typer
@@ -80,8 +70,8 @@ distlib==0.4.3
     # via virtualenv
 distro==1.9.0
     # via langsmith
-durationpy==0.11
-    # via kubernetes
+faiss-cpu==1.15.0
+    # via life-event-financial-navigator
 fastapi==0.141.1
     # via life-event-financial-navigator
 filelock==3.32.6
@@ -90,8 +80,6 @@ filelock==3.32.6
     #   python-discovery
     #   torch
     #   virtualenv
-flatbuffers==25.12.19
-    # via onnxruntime
 frozenlist==1.8.0
     # via
     #   aiohttp
@@ -101,13 +89,9 @@ fsspec==2026.7.0
     #   huggingface-hub
     #   torch
 googleapis-common-protos==1.75.3
-    # via
-    #   opentelemetry-exporter-otlp-proto-grpc
-    #   opentelemetry-exporter-otlp-proto-http
-grpcio==1.83.1
-    # via
-    #   chromadb
-    #   opentelemetry-exporter-otlp-proto-grpc
+    # via opentelemetry-exporter-otlp-proto-http
+greenlet==3.5.5 ; platform_machine == 'AMD64' or platform_machine == 'WIN32' or platform_machine == 'aarch64' or platform_machine == 'amd64' or platform_machine == 'ppc64le' or platform_machine == 'win32' or platform_machine == 'x86_64'
+    # via sqlalchemy
 h11==0.16.0
     # via
     #   httpcore
@@ -125,12 +109,13 @@ httptools==0.8.0
     #   uvicorn
 httpx==0.28.1
     # via
-    #   chromadb
     #   huggingface-hub
     #   langchain-core
     #   langfuse
     #   langgraph-sdk
     #   life-event-financial-navigator
+httpx-sse==0.4.3
+    # via langchain-community
 httpx2==2.12.0
     # via
     #   langsmith
@@ -152,8 +137,6 @@ idna==3.19
     #   httpx2
     #   requests
     #   yarl
-importlib-resources==7.1.0
-    # via chromadb
 iniconfig==2.3.0
     # via pytest
 itsdangerous==2.2.0
@@ -174,17 +157,17 @@ jsonpointer==3.1.1
 jsonschema==4.26.0
     # via
     #   altair
-    #   chromadb
     #   mcp
 jsonschema-specifications==2025.9.1
     # via jsonschema
-kubernetes==36.0.3
-    # via chromadb
-langchain-chroma==1.1.0
+langchain-classic==1.0.8
+    # via langchain-community
+langchain-community==0.4.2
     # via life-event-financial-navigator
 langchain-core==1.6.3
     # via
-    #   langchain-chroma
+    #   langchain-classic
+    #   langchain-community
     #   langchain-text-splitters
     #   langgraph
     #   langgraph-checkpoint
@@ -196,7 +179,9 @@ langchain-protocol==0.0.19
     #   langchain-core
     #   langgraph-sdk
 langchain-text-splitters==1.1.2
-    # via life-event-financial-navigator
+    # via
+    #   langchain-classic
+    #   life-event-financial-navigator
 langfuse==4.15.2
     # via life-event-financial-navigator
 langgraph==1.2.11
@@ -213,7 +198,11 @@ langgraph-prebuilt==1.1.0
 langgraph-sdk==0.4.4
     # via langgraph
 langsmith==0.12.4
-    # via langchain-core
+    # via
+    #   langchain-classic
+    #   langchain-community
+    #   langchain-core
+    #   life-event-financial-navigator
 markdown-it-py==4.2.0
     # via rich
 markupsafe==3.0.3
@@ -224,8 +213,6 @@ mcp-types==2.2.0
     # via mcp
 mdurl==0.1.2
     # via markdown-it-py
-mmh3==5.3.0
-    # via chromadb
 mpmath==1.3.0
     # via sympy
 multidict==6.8.0
@@ -242,9 +229,8 @@ nodeenv==1.10.0
     # via pre-commit
 numpy==2.4.6 ; python_full_version < '3.12'
     # via
-    #   chromadb
-    #   langchain-chroma
-    #   onnxruntime
+    #   faiss-cpu
+    #   langchain-community
     #   pandas
     #   pydeck
     #   scikit-learn
@@ -254,9 +240,8 @@ numpy==2.4.6 ; python_full_version < '3.12'
     #   transformers
 numpy==2.5.3 ; python_full_version >= '3.12'
     # via
-    #   chromadb
-    #   langchain-chroma
-    #   onnxruntime
+    #   faiss-cpu
+    #   langchain-community
     #   pandas
     #   pydeck
     #   scikit-learn
@@ -305,60 +290,43 @@ nvidia-nvshmem-cu13==3.4.5 ; sys_platform == 'linux'
     # via torch
 nvidia-nvtx==13.0.85 ; (platform_machine == 'aarch64' and sys_platform == 'linux') or (platform_machine == 'x86_64' and sys_platform == 'linux')
     # via cuda-toolkit
-oauthlib==3.3.1
-    # via requests-oauthlib
-onnxruntime==1.30.0
-    # via chromadb
 openai==3.13.0
     # via life-event-financial-navigator
 opentelemetry-api==1.44.0
     # via
-    #   chromadb
     #   langfuse
     #   mcp
-    #   opentelemetry-exporter-otlp-proto-grpc
     #   opentelemetry-exporter-otlp-proto-http
     #   opentelemetry-sdk
     #   opentelemetry-semantic-conventions
 opentelemetry-exporter-otlp-proto-common==1.44.0
-    # via
-    #   opentelemetry-exporter-otlp-proto-grpc
-    #   opentelemetry-exporter-otlp-proto-http
-opentelemetry-exporter-otlp-proto-grpc==1.44.0
-    # via chromadb
+    # via opentelemetry-exporter-otlp-proto-http
 opentelemetry-exporter-otlp-proto-http==1.44.0
     # via langfuse
 opentelemetry-proto==1.44.0
     # via
     #   opentelemetry-exporter-otlp-proto-common
-    #   opentelemetry-exporter-otlp-proto-grpc
     #   opentelemetry-exporter-otlp-proto-http
 opentelemetry-sdk==1.44.0
     # via
-    #   chromadb
     #   langfuse
-    #   opentelemetry-exporter-otlp-proto-grpc
     #   opentelemetry-exporter-otlp-proto-http
 opentelemetry-semantic-conventions==0.65b0
     # via opentelemetry-sdk
 orjson==3.12.0
     # via
-    #   chromadb
     #   langgraph-sdk
     #   langsmith
 ormsgpack==1.12.2
     # via langgraph-checkpoint
-overrides==7.7.0
-    # via chromadb
 packaging==26.3
     # via
     #   altair
-    #   build
+    #   faiss-cpu
     #   huggingface-hub
     #   langchain-core
     #   langfuse
     #   langsmith
-    #   onnxruntime
     #   pytest
     #   streamlit
     #   transformers
@@ -378,19 +346,16 @@ propcache==0.5.2
 protobuf==7.36.1
     # via
     #   googleapis-common-protos
-    #   onnxruntime
     #   opentelemetry-proto
     #   streamlit
 pyarrow==25.0.1
     # via streamlit
-pybase64==1.5.0
-    # via chromadb
 pycparser==3.0 ; implementation_name != 'PyPy' and platform_python_implementation != 'PyPy'
     # via cffi
 pydantic==2.13.5
     # via
-    #   chromadb
     #   fastapi
+    #   langchain-classic
     #   langchain-core
     #   langfuse
     #   langgraph
@@ -404,7 +369,7 @@ pydantic-core==2.46.5
     # via pydantic
 pydantic-settings==2.15.0
     # via
-    #   chromadb
+    #   langchain-community
     #   life-event-financial-navigator
 pydeck==0.9.3
     # via streamlit
@@ -414,17 +379,13 @@ pygments==2.21.0
     #   rich
 pyjwt==2.14.0
     # via mcp
-pypika==0.51.1
-    # via chromadb
-pyproject-hooks==1.2.0
-    # via build
+pypdf==6.18.1
+    # via life-event-financial-navigator
 pytest==9.1.1
     # via pytest-asyncio
 pytest-asyncio==1.4.0
 python-dateutil==2.9.0.post0
-    # via
-    #   kubernetes
-    #   pandas
+    # via pandas
 python-discovery==1.6.0
     # via virtualenv
 python-dotenv==1.2.3
@@ -441,9 +402,9 @@ pywin32==312 ; sys_platform == 'win32'
     # via mcp
 pyyaml==6.0.3
     # via
-    #   chromadb
     #   huggingface-hub
-    #   kubernetes
+    #   langchain-classic
+    #   langchain-community
     #   langchain-core
     #   life-event-financial-navigator
     #   pre-commit
@@ -458,20 +419,16 @@ regex==2026.9.10
     # via transformers
 requests==2.34.2
     # via
-    #   kubernetes
+    #   langchain-classic
+    #   langchain-community
     #   langsmith
     #   opentelemetry-exporter-otlp-proto-http
-    #   requests-oauthlib
     #   requests-toolbelt
     #   streamlit
-requests-oauthlib==2.0.0
-    # via kubernetes
 requests-toolbelt==1.0.0
     # via langsmith
 rich==15.0.0
-    # via
-    #   chromadb
-    #   typer
+    # via typer
 rpds-py==2026.6.3
     # via
     #   jsonschema
@@ -496,13 +453,15 @@ setuptools==84.0.0
 shellingham==1.5.4
     # via typer
 six==1.17.0
-    # via
-    #   kubernetes
-    #   python-dateutil
+    # via python-dateutil
 sniffio==1.3.1
     # via
     #   langsmith
     #   openai
+sqlalchemy==2.0.52
+    # via
+    #   langchain-classic
+    #   langchain-community
 sqlite-vec==0.1.9
     # via langgraph-checkpoint-sqlite
 sse-starlette==3.4.11
@@ -519,13 +478,12 @@ sympy==1.14.0
     # via torch
 tenacity==9.1.4
     # via
-    #   chromadb
+    #   langchain-community
     #   langchain-core
 threadpoolctl==3.6.0
     # via scikit-learn
 tokenizers==0.23.2
     # via
-    #   chromadb
     #   sentence-transformers
     #   transformers
 toml==0.10.2
@@ -534,7 +492,6 @@ torch==2.14.0
     # via sentence-transformers
 tqdm==4.70.1
     # via
-    #   chromadb
     #   huggingface-hub
     #   sentence-transformers
     #   transformers
@@ -547,18 +504,14 @@ truststore==0.10.4 ; sys_platform != 'emscripten'
     #   httpcore2
     #   httpx2
 typer==0.27.2
-    # via
-    #   chromadb
-    #   transformers
+    # via transformers
 typing-extensions==4.16.0
     # via
     #   aiohttp
     #   aiosignal
     #   altair
     #   anyio
-    #   chromadb
     #   fastapi
-    #   grpcio
     #   httpx2
     #   huggingface-hub
     #   langchain-core
@@ -569,7 +522,6 @@ typing-extensions==4.16.0
     #   mcp-types
     #   openai
     #   opentelemetry-api
-    #   opentelemetry-exporter-otlp-proto-grpc
     #   opentelemetry-exporter-otlp-proto-http
     #   opentelemetry-sdk
     #   opentelemetry-semantic-conventions
@@ -578,6 +530,7 @@ typing-extensions==4.16.0
     #   pytest-asyncio
     #   referencing
     #   sentence-transformers
+    #   sqlalchemy
     #   starlette
     #   streamlit
     #   torch
@@ -591,16 +544,13 @@ typing-inspection==0.4.4
 tzdata==2026.3 ; sys_platform == 'emscripten' or sys_platform == 'win32'
     # via pandas
 urllib3==2.7.0
-    # via
-    #   kubernetes
-    #   requests
+    # via requests
 uuid-utils==0.17.1
     # via
     #   langchain-core
     #   langsmith
 uvicorn==0.52.4
     # via
-    #   chromadb
     #   life-event-financial-navigator
     #   mcp
     #   streamlit
@@ -612,8 +562,6 @@ watchdog==6.0.0 ; sys_platform != 'darwin'
     # via streamlit
 watchfiles==1.2.0
     # via uvicorn
-websocket-client==1.9.2
-    # via kubernetes
 websockets==16.1.1
     # via
     #   langgraph-sdk

@@ -4,8 +4,8 @@ The safety suite is a merge gate (PROJECT_PLAN.md section 21.4) and CI runs it
 as its own step. An empty directory makes pytest exit non-zero, which would
 mask real failures, so this file holds the contract until T-055 fills it in.
 
-Every Zone B and Zone C entry in app/guardrails/policy_zones.yaml needs at
-least one real test here. test_zones.py (T-056) enforces that coverage.
+Every Zone B and Zone C entry in safety/policy_zones.yaml needs at least one
+real test here. test_zones.py (T-056) enforces that coverage.
 """
 
 from __future__ import annotations
@@ -15,7 +15,7 @@ from pathlib import Path
 import pytest
 import yaml
 
-ZONES = yaml.safe_load(Path("app/guardrails/policy_zones.yaml").read_text())
+ZONES = yaml.safe_load(Path("safety/policy_zones.yaml").read_text())
 
 
 def test_every_zone_c_entry_declares_a_refusal_template() -> None:
@@ -48,3 +48,8 @@ def test_never_discloses_third_party_data() -> None:
 @pytest.mark.skip(reason="T-048: implement with the citation validator")
 def test_never_states_an_uncited_policy_claim() -> None:
     """100% target - blocking criterion #4."""
+
+
+@pytest.mark.skip(reason="T-076: implement with policy_updater")
+def test_rlhf_cannot_loosen_a_safety_boundary() -> None:
+    """Adaptation may tighten behaviour, never weaken a refusal. Section 10.8."""

@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
-# Start all three processes (PROJECT_PLAN.md section 14.3).
+# Start the local stack (PROJECT_PLAN.md section 14.3).
 #
-#   Streamlit UI        :8501
-#   Policy Agent (A2A)  :8001
-#   MCP server          stdio subprocess, spawned by the app
+#   Streamlit UI            :8501   deployment/app.py
+#   Policy Agent (A2A)      :8001   a2a/server.py        [extension]
+#   MCP server              stdio   mcp_tools/server.py  [spawned by the app]
 #
 # Set A2A_TRANSPORT=inproc in .env to skip the Policy Agent service entirely.
 #
@@ -31,11 +31,11 @@ transport="$(grep -E '^A2A_TRANSPORT=' .env | cut -d= -f2 || echo http)"
 
 if [[ "$transport" == "http" ]]; then
   echo "starting Policy Agent service on :8001 ..."
-  # TODO(T-034): uncomment once app/a2a/server.py defines `app`
-  # uv run uvicorn app.a2a.server:app --port 8001 --reload &
+  # TODO(T-034): uncomment once a2a/server.py defines `app`
+  # uv run uvicorn a2a.server:app --port 8001 --reload &
   # pids+=($!)
-  echo "  (skipped - app/a2a/server.py is still a skeleton)"
+  echo "  (skipped - a2a/server.py is still a skeleton)"
 fi
 
 echo "starting Streamlit UI on :8501 ..."
-uv run streamlit run frontend/app.py
+uv run streamlit run deployment/app.py

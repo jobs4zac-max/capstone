@@ -1,0 +1,32 @@
+{
+  "_comment": [
+    "RUNTIME-MUTABLE ADAPTIVE PARAMETERS ONLY.",
+    "policy_rlhf/policy_updater.py may write this file; a human need not.",
+    "It must NEVER contain refusal boundaries - those live in",
+    "safety/policy_zones.yaml, which only a reviewed commit can change.",
+    "policy_rlhf/policy_checker.py rejects any key outside",
+    "policy_zones.yaml -> adaptive_allowlist, and rejects any change that",
+    "loosens behaviour relative to the safety floor.",
+    "Plan: PROJECT_PLAN.md section 18.2, task T-076"
+  ],
+  "version": 1,
+  "updated_at": null,
+  "updated_by": null,
+
+  "clarification_threshold": 0.70,
+
+  "retrieval_preferences": {
+    "boost": {},
+    "demote": {}
+  },
+
+  "approved_exemplars": [],
+
+  "response_style": {
+    "max_next_steps": 4,
+    "always_state_uncertainty": true,
+    "always_cite_policy_claims": true
+  },
+
+  "change_log": []
+}

@@ -27,7 +27,7 @@ def _test_env() -> None:
 
 # TODO(T-009): fixtures for
 #   - settings override
-#   - in-memory vector store seeded with a tiny fixture corpus
+#   - in-memory FAISS index seeded with a tiny fixture corpus
 #   - fake LLM client backed by the replay cache
-#   - MCP client pointed at fixture mock data
-#   - case loader for tests/evaluation/cases/**.yaml
+#   - mcp_tools client pointed at fixture mock data
+#   - case loader for data/evaluation/test_cases.json

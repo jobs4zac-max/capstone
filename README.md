@@ -40,9 +40,13 @@ that implements them.
 
 Implemented so far:
 
-- [x] Package tree, tooling, CI workflow, pre-commit hooks
-- [x] Typed configuration (`app/config/settings.py`)
-- [x] Boundary definitions skeleton (`app/guardrails/policy_zones.yaml`)
+- [x] Package tree matching the course's recommended structure
+- [x] Tooling, CI workflow, pre-commit hooks
+- [x] Typed configuration (`deployment/config.py`)
+- [x] Immutable safety floor (`safety/policy_zones.yaml`)
+- [x] Adaptive policy seed + RLHF/eval data stubs (`data/`)
+- [x] Skill card (`skills/SKILL.md`)
+- [x] The five graded deliverables as placeholders (`docs/`)
 - [x] Runnable Streamlit shell (layout only, no agent)
 - [x] Milestone-0 smoke tests
 - [ ] Everything else — see the roadmap in `PROJECT_PLAN.md` §20
@@ -130,7 +134,7 @@ cd life-event-financial-navigator
 
 cp .env.example .env          # then edit .env and add your API key
 
-uv sync                       # creates .venv/, installs ~185 packages
+uv sync                       # creates .venv/, installs ~172 packages
 ```
 
 `uv sync` reads `.python-version` (3.12) and `uv.lock`, downloads that exact
@@ -147,7 +151,7 @@ Your API key is in Vocareum: left sidebar → **GenAI Details** → **Credential
 Run it:
 
 ```bash
-uv run streamlit run frontend/app.py     # → http://localhost:8501
+uv run streamlit run deployment/app.py     # → http://localhost:8501
 ```
 
 Checks:
@@ -190,13 +194,13 @@ cp .env.example .env               # then edit .env and add your API key
 ```
 
 `requirements.txt` includes the dev tooling (pytest, ruff, pre-commit) and an
-editable install of this project (`-e .`), so `import app` works without any
-`PYTHONPATH` juggling.
+editable install of this project (`-e .`), so `import agent`, `import retrieval`
+and friends work without any `PYTHONPATH` juggling.
 
 Run it — with the venv activated, drop the `uv run` prefix:
 
 ```bash
-streamlit run frontend/app.py      # → http://localhost:8501
+streamlit run deployment/app.py      # → http://localhost:8501
 
 pytest -q
 pytest tests/safety -q
@@ -262,29 +266,42 @@ and anything matching a live key pattern.
 
 ## Layout
 
-```
-app/
-├── config/          typed settings — the ONLY reader of env vars
-├── agents/          3 agents + deliberate non-agent nodes  (§5)
-├── orchestration/   LangGraph state machine, state, memory  (§6)
-├── a2a/             typed envelopes + the one real A2A service  (§9)
-├── rag/             ingest → chunk → embed → retrieve → context  (§7)
-├── mcp/             read-only tool surface + guarded client  (§8)
-├── guardrails/      four deterministic gates; owns every 100% target  (§10)
-├── hitl/            escalation packets, queue, review  (§11)
-├── adaptation/      feedback → behaviour change  (§18.2)
-├── observability/   tracing that can never break the request  (§12)
-├── evaluation/      cases, checkers, metrics, reports  (§19)
-├── llm/             provider client + record/replay cache
-└── variants/        the capability ladder v1..v6  (§18.2)
+Flat top-level packages, matching the course's recommended project structure.
 
-data/policies/       synthetic policy corpus (markdown + front-matter)
-data/customers/      mock customers and accounts
-frontend/            Streamlit support console
-tests/safety/        the merge gate
-scripts/             reproducible entry points for every artefact
-docs/                the five graded deliverables
 ```
+docs/            the five graded deliverables (exact expected filenames)
+skills/          SKILL.md — declarative capability card
+knowledge/       raw/ source corpus · processed/chunks.json · faiss_index/
+data/            policy/ (adaptive) · rlhf/ · evaluation/ · mock customer data
+agent/           core agent, prompts, memory, planner + our specialists  (§5)
+retrieval/       loader → chunker → embedder → faiss_store → retriever  (§7)
+tools/           tool_registry, tool_search, tool_escalate  (§8)
+mcp_tools/       read-only MCP server + guarded client  (§8)
+safety/          guardrails, pii_filter, four gates, policy_zones.yaml  (§10)
+policy_rlhf/     policy_checker, feedback_collector, policy_updater  (§18.2)
+monitoring/      langfuse_logger, langsmith_tracer, redaction  (§12)
+evaluation/      test_harness, metrics, checkers, report  (§19)
+hitl/            escalation packets, queue, review  (§11)
+a2a/             typed envelopes + Policy Agent service  (§9) [EXTENSION]
+llm/             provider client + record/replay cache
+deployment/      app.py (Streamlit) · config.py (settings)  (§14)
+logs/            interactions · mcp_events · policy_change · errors
+tests/safety/    the merge gate
+scripts/         reproducible entry points for every artefact
+```
+
+### Deviations from the recommended structure
+
+Two, both deliberate and both recorded in `docs/engineering_justification.md`:
+
+| Deviation | Reason |
+|---|---|
+| `mcp_tools/` instead of `mcp/` | **Forced.** A local `mcp/` package shadows the installed `mcp` SDK, breaking every SDK import. Not a preference. |
+| `a2a/` added | Agent-to-Agent is absent from the recommended structure. We keep it as a justified extension (§9.4) and it is first on the descoping list (§20.5). |
+
+Everything else — including all five `docs/` filenames, `knowledge/faiss_index/`,
+`skills/SKILL.md`, `policy_rlhf/`, both tracers in `monitoring/`, and `logs/` —
+matches the expected layout exactly.
 
 ### Two design decisions worth knowing before you read the code
 
