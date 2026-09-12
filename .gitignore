@@ -27,6 +27,7 @@ service-account*.json
 *.pptx
 *.xlsx
 *.zip
+*.structure
 
 # ...BUT the RAG source corpus must be committed, or nobody can rebuild the
 # index. Negations must come after the broad pattern above.
