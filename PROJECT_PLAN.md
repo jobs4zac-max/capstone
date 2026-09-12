@@ -1765,7 +1765,8 @@ capstone/
 │   └── log_files.py                # writes logs/*.log
 │
 ├── evaluation/
-│   ├── test_harness.py  metrics.py  cases.py  checkers.py  report.py
+│   ├── test_harness.py  metrics.py  eval_rubric.py
+│   ├── cases.py  checkers.py  report.py
 │
 ├── hitl/                           # escalation packets, queue, review  (§11)
 │   ├── packet.py  queue.py  review.py
@@ -1810,7 +1811,7 @@ capstone/
 | `safety/` | Zones, four gates, redaction, injection, templates | M2 + M3 |
 | `policy_rlhf/` | Feedback → bounded behaviour change | M2 |
 | `monitoring/` | Tracing, redaction sink, log files | M3 |
-| `evaluation/` | Harness, checkers, metrics, reports | M3 |
+| `evaluation/` | Harness, rubric, checkers, metrics, reports | M3 |
 | `hitl/` | Escalation packets, queue, review flow | M1 |
 | `a2a/` | Envelopes, transports, Policy Agent service | M1 |
 | `llm/` | Provider client, cache, versioned prompts | M2 |
@@ -1919,6 +1920,12 @@ Three tiers, with a strict rule about which uses an LLM judge:
 
 > **Rule: an LLM never judges a 100% criterion.** A probabilistic judge cannot certify a
 > deterministic guarantee, and a model grading its own family's output is circular.
+
+All three tiers read their standard from **`evaluation/eval_rubric.py`**, which is the single
+declaration of what "good" means: the twelve criterion definitions with targets and blocking
+flags, the anchored 1–5 descriptors for the LLM-judge criteria, and the RED/AMBER/GREEN
+roll-up logic. It is kept as data rather than behaviour so the bar can be diffed in review —
+`metrics.py` computes numbers, `eval_rubric.py` declares what those numbers must clear.
 
 ### 19.2 Test case structure
 
@@ -2269,7 +2276,8 @@ inter-agent · `GRD` guardrails · `HIT` human-in-the-loop · `OBS` observabilit
 | T-077 | M9 | AGT | Adaptation signals 2–3: clarification threshold, exemplars | Adaptation | M2 | T-076 | P1 |
 | T-078 | M9 | AGT | `v6_adaptive` + before/after evidence | Phase-7 evidence | M3 | T-076 | P0 |
 | T-079 | M10 | EVL | Complete ~55 test cases across all categories | Full suite | M3 | T-055 | P0 |
-| T-080 | M10 | EVL | All 12 metrics + blocking logic | Metric engine | M3 | T-079 | P0 |
+| T-080 | M10 | EVL | All 12 metrics + blocking logic | Metric engine | M3 | T-079, T-096 | P0 |
+| T-096 | M0 | EVL | `eval_rubric.py`: criterion defs, judge anchors, verdict logic | Scoring rubric | M3 | T-009 | P0 |
 | T-081 | M10 | EVL | Degradation cases (LLM/A2A/MCP/empty store down) | NFR-07 evidence | M3 | T-038 | P0 |
 | T-082 | M10 | EVL | `compare_prompts.py` → prompt-comparison table | **Mandatory artefact** | M2 | T-079 | P0 |
 | T-083 | M10 | EVL | `compare_variants.py` → phase-by-phase evidence | Phase evidence | M3 | T-078, T-079 | P0 |

@@ -138,5 +138,17 @@ def test_expected_docs_deliverables_exist_with_exact_names() -> None:
         assert Path("docs", name).is_file(), f"missing deliverable: docs/{name}"
 
 
+def test_expected_evaluation_modules_exist() -> None:
+    """Instructor named eval_rubric.py alongside the harness and metrics."""
+    for name in ["test_harness.py", "metrics.py", "eval_rubric.py"]:
+        assert Path("evaluation", name).is_file(), f"missing evaluation/{name}"
+
+
+def test_expected_mcp_modules_exist() -> None:
+    """Instructor named server.py and client.py in the MCP package."""
+    for name in ["server.py", "client.py"]:
+        assert Path("mcp_tools", name).is_file(), f"missing mcp_tools/{name}"
+
+
 def test_skill_card_exists() -> None:
     assert Path("skills/SKILL.md").is_file()
