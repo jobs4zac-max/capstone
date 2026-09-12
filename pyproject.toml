@@ -83,7 +83,10 @@ packages = [
 [tool.ruff]
 line-length = 100
 target-version = "py311"
-extend-exclude = ["knowledge", "data", "docs", "logs"]
+# Markdown is excluded because ruff formats Python code blocks *inside* .md
+# files, and it wants to reflow the illustrative snippets in PROJECT_PLAN.md.
+# Those are documentation written for humans, not code we ship.
+extend-exclude = ["knowledge", "data", "docs", "logs", "*.md"]
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B", "SIM"]
