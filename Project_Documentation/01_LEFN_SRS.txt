@@ -1,0 +1,1053 @@
+===============================================================================
+SOFTWARE REQUIREMENTS SPECIFICATION (SRS)
+PROJECT: NOVABANK LIFE-EVENT FINANCIAL NAVIGATOR (LEFN)
+===============================================================================
+Document ID    : LEFN-SRS-01
+Version        : 1.0 (Draft for team review / build baseline)
+Date           : 2026-09-19
+Team           : Sudershan Patri, Arjun Cheruparambil, Raveendran Subbiah
+Companion docs : 02_LEFN_KnowledgeBase_and_Data_Spec.txt
+                 03_LEFN_Test_and_Evaluation_Plan.txt
+                 wiki/00_Home.md ... wiki/06_Project_Plan_and_Team.md
+
+Requirement language:  SHALL = mandatory | SHOULD = recommended | MAY = optional
+Priority tags:         [M] must-have for capstone pass | [S] should-have | [C] could-have (bonus)
+
+TABLE OF CONTENTS
+  1. Introduction (purpose, scope, assumptions, design decisions)
+  2. Product Overview (problem, goal, users, scope boundaries)
+  3. System Architecture, Tech Stack, Repository, Configuration
+  4. Data Model Specification (enums and Pydantic schemas)
+  5. Functional Requirements (FR-1 .. FR-14)
+  6. Tool & Interface Specification
+  7. Dialogue Policy: Routing Rules and Thresholds
+  8. Prompt Requirements
+  9. Response Format, Tone and Fallback Templates
+ 10. Non-Functional Requirements
+ 11. Guardrail and Compliance Requirements
+ 12. Deliverables
+ 13. Acceptance Criteria (mapped to Success Criteria)
+ 14. Traceability Matrix
+ 15. Risks and Mitigations
+ 16. Change Log
+
+===============================================================================
+1. INTRODUCTION
+===============================================================================
+1.1 PURPOSE
+-------------------------------------------------------------------------------
+This SRS defines everything needed to build the NovaBank Life-Event Financial
+Navigator (LEFN): an AI agent that detects major life events in customer
+conversations (marriage, new child, job change, job loss, relocation,
+retirement) and gives policy-grounded, personalized, INFORMATIONAL guidance
+about banking products, policies, documents and next steps. LEFN never
+executes transactions, never gives personalized investment/tax/legal advice,
+never fabricates policies or customer data, and escalates to a human whenever
+it cannot be safe and certain.
+
+1.2 SCOPE
+-------------------------------------------------------------------------------
+In scope  : conversational agent, RAG over an approved (synthetic) NovaBank
+            knowledge base, read-only mock customer data, safety guardrails,
+            human-escalation handoff (mock queue), audit logging, evaluation
+            harness, CLI/notebook demo, optional web UI.
+Out of scope: real banking systems/APIs, real customer data, any write
+            operation, payments, account/loan/beneficiary changes, investment
+            execution, tax/legal advice, non-English languages, voice.
+
+1.3 DEFINITIONS
+-------------------------------------------------------------------------------
+LEFN          Life-Event Financial Navigator (this system)
+KB            Approved knowledge base of NovaBank policy/product documents
+RAG           Retrieval-Augmented Generation
+Life event    One of: MARRIAGE, NEW_CHILD, JOB_CHANGE, JOB_LOSS, RELOCATION,
+              RETIREMENT
+Guidance      Grounded, informational answer with citations
+Escalation    Handoff of the case (with summary) to a human representative
+Session       One customer conversation; state is discarded when it ends
+Guest         Unauthenticated session (no customer data available)
+Trace ID      Unique ID linking a customer turn to its audit record
+CSR / FSA     Customer Service Representative / Financial Services Advisor
+
+1.4 REFERENCES
+-------------------------------------------------------------------------------
+[R1] Capstone problem statement (Life-Event Financial Navigator) - scope,
+     success criteria, failure cases, 8 formal conversation samples.
+[R2] UdaPlay Project Requirements - pattern reused: RAG (FAISS) -> evaluate
+     retrieval -> fallback, LangChain tools, notebooks 01/02, cited answers.
+[R3] AgentsVille SRS - pattern reused: structured Pydantic outputs, named
+     system prompts, json-repair robustness, low-temperature determinism,
+     corrective feedback on malformed output, "evaluate before final answer".
+
+1.5 ASSUMPTIONS AND CONSTRAINTS
+-------------------------------------------------------------------------------
+A-1  This is a capstone. ALL bank content and customer data is SYNTHETIC and
+     authored by the team. Nothing in the KB is real NovaBank policy.
+A-2  Currency is EUR, dates are ISO-8601, language is English.
+A-3  Team of three; suggested workstreams are in wiki/06_Project_Plan_and_Team.md.
+A-4  LLM access is via OpenAI-compatible API (optionally the Vocareum
+     endpoint used in the reference projects). Model: gpt-4o-mini.
+A-5  Numeric thresholds in Section 7 are defaults and SHALL be configurable.
+A-6  "High-value decision" threshold defaults to EUR 10,000 (configurable);
+     Compliance/Risk role should confirm the value for the demo.
+A-7  No web search: the only knowledge source is the approved KB (see D-3).
+
+1.6 KEY DESIGN DECISIONS (baseline; changes require change-log entry)
+-------------------------------------------------------------------------------
+D-1  Orchestration: LangGraph state machine over LangChain components
+     (fallback: plain-Python state machine with identical nodes).
+D-2  Routing is DETERMINISTIC CODE. LLMs are used only inside bounded nodes
+     (classify, extract, evaluate, generate, verify). This makes behaviour
+     testable and auditable.
+D-3  No external web fallback (unlike UdaPlay). Insufficient KB coverage leads
+     to clarification or human escalation, never to open-web answers.
+D-4  Read-only tool registry. No write-capable or payment tool exists in the
+     codebase; this is asserted by an automated test (transaction safety by
+     construction).
+D-5  Customer identity is bound to the session context by the application.
+     The LLM can never supply or change a customer_id (privacy by construction).
+D-6  Retrieved text and user text are UNTRUSTED DATA. Instructions inside them
+     are never followed (prompt-injection defence).
+D-7  Two-layer hallucination defence: deterministic checks (citation IDs,
+     numbers/entities must appear in retrieved text) + LLM groundedness verifier.
+D-8  Structured outputs everywhere (Pydantic v2), with json-repair fallback.
+D-9  Short-term memory only (in-session). No long-term storage of customer
+     facts. Only audit logs (PII-redacted) and escalation tickets persist.
+D-10 Escalation is a first-class outcome, not a failure.
+
+===============================================================================
+2. PRODUCT OVERVIEW
+===============================================================================
+2.1 PROBLEM CONTEXT
+-------------------------------------------------------------------------------
+Customers face financial changes during major life events (marriage, child,
+job change/loss, relocation, retirement) but do not know which products,
+policies, fees, documents or procedures are relevant. Traditional support
+answers isolated questions; it does not recognise the broader life event or
+proactively surface relevant considerations. A safe, policy-grounded system is
+needed that recognises life events from conversation and guides the customer
+without transactions, unsupported advice, or assumptions about the customer.
+
+2.2 PRIMARY GOAL
+-------------------------------------------------------------------------------
+Detect relevant life events from customer conversations and provide
+policy-grounded, personalized financial guidance about applicable banking
+products, policies and next steps, without executing transactions or making
+high-risk financial decisions.
+
+2.3 USER TYPES AND HOW THEY INTERACT
+-------------------------------------------------------------------------------
+Role                      Interaction with LEFN                       Interface
+------------------------- ------------------------------------------- ---------
+Bank Customer             Chats; receives guidance, refusals,         CLI/UI
+                          clarifying questions, escalation offers
+Customer Service Rep      Receives escalation tickets + handoff        CSR console
+                          summary; sees trace of what agent did
+Financial Services        Receives high-risk/advice escalations;       CSR console
+Advisor                   reports KB gaps
+QA / Evaluation Engineer  Runs golden-set evaluation, reads metrics    Eval CLI/NB03
+Compliance / Risk Analyst Reviews audit logs, approves KB documents,   Audit report,
+                          confirms guardrail rules and thresholds      KB approval
+Developer                 Extends KB, tools, prompts; runs tests/CI    Repo, notebooks
+
+2.4 SCOPE BOUNDARIES (from problem statement)
+-------------------------------------------------------------------------------
+ALLOWED
+  - Detect life events from conversation context (6 events)
+  - Identify potentially relevant banking considerations
+  - Retrieve from approved policy/product documentation using RAG
+  - Provide general, evidence-based guidance
+  - Explain account options, products, fees, eligibility, required documents,
+    and bank procedures
+  - Use authorized, read-only customer information where available
+  - Identify missing information needed for a reliable answer
+  - Recommend next steps
+  - Escalate complex or high-risk situations to a human
+
+STOP / ASK HUMAN
+  - Personalized investment or financial decisions with significant consequences
+  - Complex tax or legal questions
+  - Ambiguous customer circumstances (after clarification attempts)
+  - Conflicting bank policies or insufficient information
+  - Fraud or suspicious-activity concerns
+  - High-value financial decisions
+  - Situations requiring professional financial advice
+  - Requests requiring information the agent does not have
+  - Any case where the applicable policy cannot be confidently determined
+
+OUT OF SCOPE (agent must refuse to do; MAY still explain the procedure)
+  - Money transfers or payments
+  - Account creation, closure or modification
+  - Loan or credit approval
+  - Investment execution or portfolio management
+  - Changing beneficiaries or account ownership
+  - Legal or tax advice
+  - Autonomous financial decisions
+  - Unrestricted production customer data access
+  - Live banking-system transactions
+
+===============================================================================
+3. SYSTEM ARCHITECTURE, TECH STACK, REPOSITORY, CONFIGURATION
+===============================================================================
+3.1 LAYERED ARCHITECTURE
+-------------------------------------------------------------------------------
+ +-----------------------------------------------------------------------+
+ | PRESENTATION   CLI chat | (optional) Gradio UI | CSR console | Eval CLI |
+ +-----------------------------------------------------------------------+
+ | ORCHESTRATION  LangGraph state machine + in-session checkpointer       |
+ |   ingest -> input_guard -> detect_events -> route -> [branches]        |
+ |   -> output_guard -> finalize (response + audit)                       |
+ +-----------------------------------------------------------------------+
+ | AGENT NODES / TOOLS (LLM-backed, bounded)                              |
+ |   safety classifier | life-event detector | retrieval planner          |
+ |   retrieval evaluator | grounded generator | groundedness verifier     |
+ +-----------------------------------------------------------------------+
+ | KNOWLEDGE & DATA SERVICES (read-only)                                  |
+ |   FAISS policy index (approved KB) | mock customer profile service     |
+ |   escalation queue (append-only) | audit log (append-only, redacted)   |
+ +-----------------------------------------------------------------------+
+ | PLATFORM       OpenAI-compatible LLM + embeddings | config.env | logs  |
+ +-----------------------------------------------------------------------+
+
+3.2 CORE PIPELINE (one customer turn)
+-------------------------------------------------------------------------------
+ [Customer message]
+        |
+        v
+ [ingest_message]  normalise, mask PII for logs, append to history
+        |
+        v
+ [input_guard]  -> SafetyAssessment (flags)
+        |
+        v
+ [detect_events] -> LifeEventDetection (events, status, intent)
+        |
+        v
+ [route]  (deterministic rules, Section 7)
+   |-- FRAUD ---------------------------------> [escalate]
+   |-- refuse-only (no in-scope content) -----> [refuse]
+   |-- ambiguous / hypothetical / >2 events --> [clarify]
+   |-- event mention without question --------> [confirm_offer]
+   '-- explicit question / confirmed offer ----> [load_customer_context]
+                                                     |
+                                                     v
+                                              [plan_retrieval]
+                                                     |
+                                                     v
+                                              [retrieve_policy] (FAISS)
+                                                     |
+                                                     v
+                                              [evaluate_retrieval]
+                     FULL --------------> [generate_answer]
+                     PARTIAL(user info) -> [clarify]
+                     PARTIAL(other) -----> [generate_answer] (partial + offer)
+                     INSUFFICIENT -------> retry once -> [escalate]/(offer)
+                     CONFLICT -----------> [escalate]
+                                                     |
+                                                     v
+                                              [output_guard]
+                                pass -> [finalize]   fail -> regenerate once
+                                                     fail again -> [escalate]
+
+3.3 TECH STACK
+-------------------------------------------------------------------------------
+Language            : Python 3.11+
+Orchestration       : LangChain (tools, prompts, retrievers) + LangGraph
+LLM                 : OpenAI gpt-4o-mini (configurable)
+Embeddings          : OpenAI text-embedding-3-small
+Vector DB           : FAISS (faiss-cpu), local persistence
+Validation/Schemas  : Pydantic v2 (structured outputs), json-repair
+Config              : python-dotenv (config.env)
+Testing/Quality     : pytest, pytest-cov, ruff, (optional) mypy
+Reporting           : pandas (evaluation tables)
+CLI/UI              : rich (CLI), (optional) Gradio
+Notebooks           : Jupyter (3 deliverable notebooks)
+Not used            : Tavily / any web search (see D-3)
+Version pinning     : after first successful install, freeze exact versions to
+                      requirements.txt (pip freeze) so all members match.
+
+3.4 REPOSITORY STRUCTURE
+-------------------------------------------------------------------------------
+lefn/
+  config.env.example            (template; real config.env is git-ignored)
+  requirements.txt  pyproject.toml  README.md  .gitignore
+  data/
+    kb/                         approved KB markdown docs (Spec 02)
+    kb_fixtures/                conflict / injection / superseded / draft docs
+    customers/mock_customers.json
+    eval/golden_cases.jsonl     (Test Plan 03)
+    escalations/queue.jsonl     (generated)
+    audit/audit.jsonl           (generated)
+    faiss_index_lefn/           (generated)
+  src/lefn/
+    config.py  schemas.py  state.py  prompts.py  graph.py
+    guards/   input_guard.py  output_guard.py  redaction.py
+    nodes/    detect_events.py  route.py  clarify.py  confirm_offer.py
+              plan_retrieval.py  retrieve.py  evaluate.py  customer_context.py
+              generate.py  refuse.py  escalate.py  finalize.py
+    rag/      ingest.py  lint.py  index.py  retriever.py
+    services/ customer_service.py  escalation_queue.py  audit_log.py
+    tools/    registry.py         (LangChain @tool wrappers, read-only)
+    app/      cli.py  ui.py  csr_console.py
+    eval/     harness.py  metrics.py  judges.py  report.py
+  tests/      unit/  component/  graph/  scenarios/
+  notebooks/  LEFN_01_KnowledgeBase_RAG.ipynb
+              LEFN_02_Agent_Workflow.ipynb
+              LEFN_03_Evaluation.ipynb
+  docs/       wiki/ (architecture wiki pages), this SRS + companions
+
+3.5 CONFIGURATION (config.env)
+-------------------------------------------------------------------------------
+   OPENAI_API_KEY="sk-..."
+   OPENAI_BASE_URL="https://openai.vocareum.com/v1"   # optional, if course endpoint
+   LLM_MODEL="gpt-4o-mini"
+   EMBEDDING_MODEL="text-embedding-3-small"
+   KB_DIR="data/kb"
+   FAISS_INDEX_DIR="data/faiss_index_lefn"
+   CUSTOMER_DATA_PATH="data/customers/mock_customers.json"
+   LOG_DIR="data"
+   # thresholds (Section 7.3)
+   EVENT_CONFIDENCE_MIN=0.75
+   RETRIEVAL_TOP_K=5
+   SUFFICIENCY_FULL_MIN=0.70
+   SUFFICIENCY_PARTIAL_MIN=0.40
+   MAX_CLARIFICATION_TURNS=2
+   MAX_RETRIEVAL_RETRIES=1
+   MAX_EVENTS_PER_TURN=2
+   HIGH_VALUE_THRESHOLD_EUR=10000
+
+Startup verification (mirrors reference projects):
+   import os
+   from dotenv import load_dotenv
+   load_dotenv("config.env")
+   assert os.getenv("OPENAI_API_KEY") is not None, "OPENAI_API_KEY missing"
+   OPENAI_BASE_URL = os.getenv("OPENAI_BASE_URL")  # None => default OpenAI
+
+config.env SHALL be listed in .gitignore. Secrets SHALL never be logged.
+
+===============================================================================
+4. DATA MODEL SPECIFICATION (Pydantic v2; names are normative)
+===============================================================================
+4.1 ENUMERATIONS
+-------------------------------------------------------------------------------
+LifeEvent      : MARRIAGE | NEW_CHILD | JOB_CHANGE | JOB_LOSS | RELOCATION | RETIREMENT
+EventStatus    : CONFIRMED_PAST      ("we got married last week")
+                 CONFIRMED_UPCOMING  ("we are getting married in June")
+                 HYPOTHETICAL        ("I might change jobs someday")
+                 INDIRECT_SIGNAL     (implied but not stated: "money is tight since work changed")
+EventSubject   : SELF | OTHER | UNKNOWN    ("my friend lost her job" => OTHER)
+UserIntent     : EXPLICIT_QUESTION | EVENT_MENTION_ONLY | CONFIRMATION | DECLINE |
+                 FOLLOW_UP | GENERAL_POLICY_QUESTION | HUMAN_REQUEST | OUT_OF_DOMAIN
+SafetyFlag     : TRANSACTION_REQUEST | PRIVACY_VIOLATION | HIGH_RISK_ADVICE |
+                 LEGAL_TAX_ADVICE | FRAUD_CONCERN | PROMPT_INJECTION
+SufficiencyLevel: FULL | PARTIAL | INSUFFICIENT
+ResponseType   : GUIDANCE | CONFIRM_OFFER | CLARIFICATION | REFUSAL | ESCALATION
+EscalationReason: HIGH_RISK_FINANCIAL | TAX_LEGAL | AMBIGUOUS_CIRCUMSTANCES |
+                 CONFLICTING_POLICIES | INSUFFICIENT_INFORMATION | POLICY_UNDETERMINED |
+                 FRAUD_SUSPECTED | HIGH_VALUE_DECISION | PROFESSIONAL_ADVICE_REQUIRED |
+                 DATA_ACCESS_UNAVAILABLE | CLARIFICATION_EXHAUSTED | CUSTOMER_REQUEST |
+                 OUTPUT_VALIDATION_FAILED | SYSTEM_ERROR
+EscalationStatus: OFFERED | CREATED
+AuthLevel      : GUEST | AUTHENTICATED
+
+4.2 MODELS
+-------------------------------------------------------------------------------
+class DetectedEvent(BaseModel):
+    event: LifeEvent
+    status: EventStatus
+    subject: EventSubject
+    confidence: float            # 0.0-1.0
+    evidence: str                # verbatim span from the customer's message
+    attributes: dict[str, str]   # e.g. {"destination_country": "Spain"}; only
+                                 # values STATED by customer; never inferred
+
+class LifeEventDetection(BaseModel):
+    events: list[DetectedEvent]
+    intent: UserIntent
+    ambiguity_reasons: list[str]
+    missing_context: list[str]   # information needed but not provided
+
+class SafetyAssessment(BaseModel):
+    flags: list[SafetyFlag]
+    rationale: str
+    in_scope_remainder: bool     # is there a legitimate request left after
+                                 # removing the flagged part?
+
+class PolicyChunk(BaseModel):
+    chunk_id: str; doc_id: str; title: str; section: str
+    doc_type: str; version: str; effective_date: str
+    audience: str; life_events: list[str]; text: str; score: float
+
+class RetrievalEvaluation(BaseModel):     # extends UdaPlay evaluate_retrieval
+    confidence_score: float               # 0.0-1.0
+    is_sufficient: bool                   # True only when level == FULL
+    level: SufficiencyLevel
+    relevance: float; coverage: float
+    conflicts_detected: bool
+    conflict_details: str | None
+    missing_information: list[str]        # things the CUSTOMER could supply
+    reasoning: str
+
+class Citation(BaseModel):
+    doc_id: str; title: str; section: str; version: str
+
+class EscalationTicket(BaseModel):
+    ticket_id: str; created_at: str; status: EscalationStatus
+    reason: EscalationReason; priority: str   # LOW | NORMAL | URGENT
+    customer_ref: str | None                  # hashed ref, never raw ID/PII
+    summary: str                              # what customer wants, what agent did
+    detected_events: list[str]; unresolved_questions: list[str]
+    retrieved_doc_ids: list[str]; safety_flags: list[str]
+    recommended_queue: str                    # CSR | FSA | FRAUD_TEAM | HARDSHIP_TEAM | RELOCATION_DESK
+    trace_id: str
+
+class NavigatorResponse(BaseModel):
+    response_type: ResponseType
+    message: str                              # final customer-facing text
+    detected_events: list[DetectedEvent]
+    key_considerations: list[str]
+    required_documents: list[str]
+    next_steps: list[str]
+    clarifying_question: str | None           # exactly one question max
+    refusal_notice: str | None                # present if any part refused
+    escalation: EscalationTicket | None       # OFFERED or CREATED
+    citations: list[Citation]
+    missing_information: list[str]
+    confidence: float
+    trace_id: str
+
+class SessionContext(BaseModel):              # injected by app, never by LLM
+    session_id: str
+    auth_level: AuthLevel
+    customer_id: str | None                   # None for GUEST
+    channel: str = "cli"
+
+class GraphState(TypedDict):                  # LangGraph state
+    session: SessionContext
+    messages: list[Message]                   # full turn history
+    history_summary: str                      # rolling summary after 10 turns
+    safety: SafetyAssessment | None
+    detection: LifeEventDetection | None
+    pending_offer: PendingOffer | None        # {events, topics, expires_after_turns}
+    active_events: list[DetectedEvent]        # events confirmed in session
+    customer_context: dict | None             # allow-listed read-only fields
+    retrieval_queries: list[str]
+    retrieved: list[PolicyChunk]
+    evaluation: RetrievalEvaluation | None
+    retries: int
+    clarification_turns: int
+    draft: NavigatorResponse | None
+    guard_failures: int
+    response: NavigatorResponse | None
+    trace_id: str
+
+===============================================================================
+5. FUNCTIONAL REQUIREMENTS
+===============================================================================
+--- FR-1 SESSION AND CONVERSATION MANAGEMENT ---------------------------------
+[FR-1.1][M] The system SHALL support multi-turn conversations identified by a
+            session_id and SHALL maintain short-term state (GraphState) for
+            the session using an in-memory checkpointer.
+[FR-1.2][M] Each session SHALL carry a SessionContext (auth_level, customer_id)
+            supplied by the application layer. GUEST sessions SHALL have no
+            customer data access.
+[FR-1.3][M] The last 10 turns SHALL be passed verbatim to LLM nodes; older
+            turns SHALL be summarised into history_summary.
+[FR-1.4][M] The system SHALL resolve follow-ups ("what documents do I need for
+            that?") using session history and active_events.
+[FR-1.5][M] Session state SHALL be discarded at session end. No customer facts
+            SHALL persist across sessions (D-9).
+
+--- FR-2 INPUT SAFETY SCREENING ----------------------------------------------
+[FR-2.1][M] Before any other processing, every customer message SHALL be
+            classified into zero or more SafetyFlags (Section 4.1) using the
+            SAFETY_CLASSIFIER_SYSTEM_PROMPT plus deterministic pattern rules
+            (e.g. "ignore previous instructions", "system prompt", "PIN",
+            "transfer", "pay", "close my account", IBAN patterns).
+[FR-2.2][M] Multiple flags MAY co-occur (e.g. life event + transaction). The
+            system SHALL refuse only the flagged part and still serve the
+            legitimate remainder (in_scope_remainder = true).
+[FR-2.3][M] Text inside customer messages and retrieved documents SHALL be
+            handled strictly as data. Instructions embedded in them SHALL NOT
+            change system behaviour (D-6). Detected injection SHALL be logged.
+[FR-2.4][M] A request for another customer's information, credentials (PIN,
+            password, full card number), or bulk customer lists SHALL raise
+            PRIVACY_VIOLATION.
+[FR-2.5][M] Statements suggesting unauthorised transactions, scams, or
+            "safe account" requests SHALL raise FRAUD_CONCERN.
+
+--- FR-3 LIFE-EVENT DETECTION ------------------------------------------------
+[FR-3.1][M] The detector SHALL return zero or more DetectedEvents from the
+            six-event taxonomy using LIFE_EVENT_DETECTOR_SYSTEM_PROMPT and
+            structured output (LifeEventDetection).
+[FR-3.2][M] Each event SHALL have status (CONFIRMED_PAST / CONFIRMED_UPCOMING /
+            HYPOTHETICAL / INDIRECT_SIGNAL), subject (SELF / OTHER / UNKNOWN),
+            confidence, and a verbatim evidence span. Events about other
+            people SHALL NOT be treated as the customer's events.
+[FR-3.3][M] Only events with subject=SELF, status in {CONFIRMED_PAST,
+            CONFIRMED_UPCOMING} and confidence >= EVENT_CONFIDENCE_MIN are
+            "confirmed" and MAY trigger retrieval. All others require
+            clarification (FR-4).
+[FR-3.4][M] The detector SHALL extract event attributes only when STATED (e.g.
+            destination_country="Spain", salary_account_change="true"). It
+            SHALL list missing_context instead of guessing.
+[FR-3.5][M] The detector SHALL classify UserIntent, distinguishing an explicit
+            question from a bare event mention, a confirmation ("yes please")
+            or decline of a pending offer, a follow-up, a general policy
+            question, a request for a human, and out-of-domain messages.
+[FR-3.6][M] Situations outside the taxonomy (e.g. separation, promotion, death
+            of a relative) SHALL yield NOT-DETECTED (empty events) and the
+            system SHALL respond with a clarifying question or human offer;
+            it SHALL NOT map them onto the nearest event.
+[FR-3.7][M] When >1 event is confirmed, all SHALL be recorded. At most
+            MAX_EVENTS_PER_TURN (2) SHALL be handled per turn; if more, the
+            system SHALL ask which to prioritise and queue the rest.
+
+--- FR-4 DIALOGUE POLICY (ROUTING) -------------------------------------------
+[FR-4.1][M] Routing SHALL be implemented as deterministic code following the
+            precedence table in Section 7.1.
+[FR-4.2][M] CONFIRM_OFFER flow: for a confirmed event mentioned without a
+            question, the system SHALL run a light topic-discovery retrieval
+            (titles/sections only), tell the customer which documented topics
+            MAY be relevant, and ask permission to explain. State is stored as
+            pending_offer (expires after 2 turns).
+[FR-4.3][M] On CONFIRMATION of a pending_offer the system SHALL proceed to full
+            retrieval for the offered events/topics without re-asking. On
+            DECLINE it SHALL acknowledge and ask if there is anything else.
+[FR-4.4][M] CLARIFY flow: the system SHALL ask exactly ONE clear question at a
+            time. After MAX_CLARIFICATION_TURNS (2) unresolved clarifications
+            it SHALL escalate with reason CLARIFICATION_EXHAUSTED.
+[FR-4.5][M] Out-of-domain messages SHALL receive a brief, polite redirect to
+            what LEFN can help with.
+[FR-4.6][S] The system SHOULD offer the next queued event after finishing one.
+
+--- FR-5 KNOWLEDGE RETRIEVAL (RAG) -------------------------------------------
+[FR-5.1][M] The KB SHALL be ingested from data/kb (Markdown + YAML front
+            matter), validated by a KB lint (Spec 02 s.10), chunked by heading
+            (target 300-600 tokens, 60 token overlap), embedded with
+            text-embedding-3-small and stored in a persistent FAISS index
+            (save_local / load_local).
+[FR-5.2][M] Only documents with status=approved and audience=customer SHALL be
+            retrievable for customer answers. Superseded, draft and
+            internal-only documents SHALL be excluded at index/query time.
+[FR-5.3][M] The retriever SHALL support metadata filters: life_event, doc_type,
+            country, product. Default top_k = RETRIEVAL_TOP_K (5) per query.
+[FR-5.4][M] plan_retrieval SHALL produce 1-3 focused queries per turn (per
+            event / per sub-question), each with filters, using templates plus
+            LLM rewriting; results SHALL be de-duplicated and capped at 8
+            chunks in the generator context.
+[FR-5.5][M] A retrieval verification utility SHALL exist and be demonstrated in
+            Notebook 01 with >=6 queries (one per life event) plus filter tests
+            and exclusion tests (superseded/draft/internal never returned).
+[FR-5.6][S] The retriever SHOULD use MMR (fetch_k=20, lambda=0.6) to reduce
+            near-duplicate chunks.
+
+--- FR-6 RETRIEVAL EVALUATION ------------------------------------------------
+[FR-6.1][M] After every retrieval, evaluate_retrieval SHALL judge relevance,
+            coverage of the question, conflicts between chunks, and missing
+            customer information, returning RetrievalEvaluation.
+[FR-6.2][M] Level mapping: confidence >= SUFFICIENCY_FULL_MIN and no conflicts
+            and no required missing info => FULL; SUFFICIENCY_PARTIAL_MIN <=
+            confidence < FULL_MIN, or missing info => PARTIAL; else INSUFFICIENT.
+            Any conflicts_detected => treated as CONFLICT (escalate).
+[FR-6.3][M] INSUFFICIENT SHALL trigger at most MAX_RETRIEVAL_RETRIES (1) query
+            reformulation; if still INSUFFICIENT the system SHALL tell the
+            customer it could not find a supporting policy (no speculation)
+            and offer escalation (Sample 8).
+[FR-6.4][M] Conflicts SHALL never be resolved by the agent picking a side. The
+            system SHALL state that documentation conflicts and escalate with a
+            CREATED ticket (reason CONFLICTING_POLICIES).
+[FR-6.5][M] Evaluation SHALL use temperature 0.
+
+--- FR-7 CUSTOMER DATA ACCESS (READ-ONLY) ------------------------------------
+[FR-7.1][M] get_customer_profile SHALL read from the mock customer service for
+            the SessionContext.customer_id only; it SHALL accept no customer
+            identifier from the LLM (D-5).
+[FR-7.2][M] Returned fields SHALL pass a field allow-list (Spec 02 s.8). Balance
+            fields are returned only when the customer explicitly asks about
+            their own balances.
+[FR-7.3][M] Null/absent fields SHALL be reported as "not available to me", never
+            inferred or defaulted.
+[FR-7.4][M] Joint-account data MAY be returned to any authenticated holder of
+            that joint account; an individual account of another customer
+            (including a spouse) SHALL NOT be returned.
+[FR-7.5][M] GUEST sessions SHALL receive no customer data; the assistant
+            SHALL say so and give general information only.
+[FR-7.6][M] If the customer-data service fails, the system SHALL say the data
+            is unavailable, avoid guessing, and offer escalation
+            (DATA_ACCESS_UNAVAILABLE).
+
+--- FR-8 GROUNDED RESPONSE GENERATION ----------------------------------------
+[FR-8.1][M] generate_answer SHALL use ONLY (a) retrieved KB chunks, (b)
+            allow-listed customer facts, and (c) the conversation, and SHALL
+            output NavigatorResponse using GROUNDED_ANSWER_SYSTEM_PROMPT.
+[FR-8.2][M] Every factual statement about a policy, product, fee, rate,
+            deadline, eligibility rule or document SHALL be traceable to a
+            retrieved chunk. Facts about the customer SHALL come only from the
+            customer_context tool output.
+[FR-8.3][M] Language SHALL be hedged and source-attributed ("NovaBank's
+            documentation indicates...", "may be relevant"). No guarantees, no
+            invented timelines, no approval predictions.
+[FR-8.4][M] Guidance SHALL follow the structure in Section 9.1 and clearly
+            separate what the customer can do, what needs a representative,
+            and what LEFN cannot do.
+[FR-8.5][M] For refused sub-requests the response SHALL include a
+            refusal_notice and, where the KB supports it, informational help
+            about the underlying procedure (Samples 6, 7).
+[FR-8.6][M] For HIGH_RISK_ADVICE / LEGAL_TAX_ADVICE the system SHALL provide at
+            most general, cited product information, SHALL NOT recommend
+            allocations, products to buy/sell, or tax/legal conclusions, and
+            SHALL recommend a qualified professional / FSA (Sample 5).
+[FR-8.7][M] Generation temperature SHALL be <= 0.2.
+[FR-8.8][S] Empathy: acknowledge positive events with congratulations and
+            negative events (job loss) with a brief empathetic sentence before
+            information. No more than one sentence.
+
+--- FR-9 CITATIONS AND TRACEABILITY ------------------------------------------
+[FR-9.1][M] Every GUIDANCE response SHALL list the supporting sources as
+            Citations (doc_id, title, section, version) and render them under
+            "Sources".
+[FR-9.2][M] Every citation SHALL reference a chunk actually retrieved in this
+            turn (verified by output_guard).
+[FR-9.3][M] When information is customer-specific, the response SHALL say it
+            comes from the customer's account information ("Source: your
+            NovaBank profile") without exposing more fields than needed.
+[FR-9.4][M] Responses without KB support (CLARIFICATION, REFUSAL, some
+            ESCALATION) MAY have zero citations but SHALL NOT state policy facts.
+
+--- FR-10 REFUSALS -----------------------------------------------------------
+[FR-10.1][M] Transaction requests SHALL be refused with 100% reliability, with
+             a clear statement that LEFN is informational only and cannot
+             initiate or execute actions; the response SHALL NEVER claim or
+             imply an action was completed.
+[FR-10.2][M] Privacy violations SHALL be refused and the customer redirected to
+             their own account information.
+[FR-10.3][M] Repeated pressure or claims of authorisation ("I authorise you")
+             SHALL NOT change the outcome.
+[FR-10.4][M] Refusals SHALL use approved templates (Section 9.3) adapted with
+             context, and SHALL be polite and non-accusatory.
+
+--- FR-11 HUMAN ESCALATION ---------------------------------------------------
+[FR-11.1][M] escalate SHALL create an EscalationTicket with a handoff summary
+             (customer need, events, agent actions, unresolved questions,
+             retrieved docs, safety flags) so the customer need not repeat
+             information.
+[FR-11.2][M] Status rules: CREATED automatically for FRAUD_SUSPECTED,
+             CONFLICTING_POLICIES, CLARIFICATION_EXHAUSTED, CUSTOMER_REQUEST,
+             OUTPUT_VALIDATION_FAILED, SYSTEM_ERROR. OFFERED (created upon
+             customer acceptance) for all other reasons.
+[FR-11.3][M] Recommended queue SHALL be set by reason (FRAUD_TEAM, HARDSHIP_TEAM,
+             RELOCATION_DESK, FSA, CSR) per Spec 02 s.9.
+[FR-11.4][M] The customer message SHALL state what happens next only as
+             documented (e.g. "first response within 2 business days" if that
+             is in the KB), never invented SLAs.
+[FR-11.5][M] Fraud escalations SHALL be URGENT, SHALL direct the customer to
+             the documented fraud reporting route, and SHALL NOT investigate,
+             promise refunds or ask for credentials.
+
+--- FR-12 OUTPUT VALIDATION (POST-GENERATION GUARD) --------------------------
+[FR-12.1][M] Before delivery, output_guard SHALL run: (G1) schema validity;
+             (G2) citation IDs subset of retrieved chunks and status approved;
+             (G3) every number, percentage, currency amount, duration and
+             product name in the message appears in retrieved text or customer
+             context; (G4) LLM groundedness verifier finds no unsupported
+             claim; (G5) forbidden-content patterns (completion claims like
+             "I have transferred/updated", investment recommendations, tax or
+             legal conclusions); (G6) PII scan: no IBAN/email/phone/ID not
+             belonging to the session customer; (G7) refusal_notice present
+             whenever a refusal flag was raised; (G8) at most one question.
+[FR-12.2][M] On failure the system SHALL regenerate once with guard feedback
+             appended (corrective feedback pattern, cf. AgentVille NFR-2). On
+             a second failure it SHALL deliver a safe fallback template and
+             create an escalation (OUTPUT_VALIDATION_FAILED).
+
+--- FR-13 AUDIT LOGGING AND OBSERVABILITY ------------------------------------
+[FR-13.1][M] Each turn SHALL append one JSON line to audit.jsonl with: trace_id,
+             session_id, timestamp, redacted user message, safety flags,
+             detected events (event/status/confidence), route taken,
+             retrieval queries + filters, retrieved chunk IDs + scores,
+             evaluation result, guard results, response_type, citations,
+             escalation (id/reason/status), model names, latency ms, token
+             counts.
+[FR-13.2][M] Logs SHALL redact PII (IBAN, email, phone, card-like numbers, ID
+             numbers, customer names) and SHALL store customer_ref as a salted
+             hash.
+[FR-13.3][M] A trace viewer (CLI flag --trace) SHALL print the decision path of
+             a turn for demos and for Compliance review.
+[FR-13.4][S] A KB gap report SHALL list customer questions that ended
+             INSUFFICIENT/unsupported so KB owners can add documents.
+
+--- FR-14 ROLE INTERFACES, KB MANAGEMENT, EVALUATION -------------------------
+[FR-14.1][M] Customer CLI chat with --customer <ID|guest> and --trace options.
+[FR-14.2][M] CSR console lists escalation tickets and shows a ticket with its
+             handoff summary and trace.
+[FR-14.3][M] KB ingestion CLI: lint -> build index -> smoke retrieval test.
+[FR-14.4][M] Evaluation harness runs golden_cases.jsonl, computes all Success
+             Criteria metrics (Test Plan 03) and writes a Markdown/CSV report.
+[FR-14.5][M] Compliance report command summarises: escalations by reason,
+             refusals by flag, injection attempts, guard failures.
+[FR-14.6][C] Gradio web UI with customer chat, trace toggle and CSR tab.
+
+===============================================================================
+6. TOOL AND INTERFACE SPECIFICATION
+===============================================================================
+All tools are exposed as LangChain @tool wrappers for notebook demos, and are
+also called directly by graph nodes. The complete tool registry is:
+
+ #  Tool                     Signature                                        Kind
+--- ------------------------ ------------------------------------------------ -----
+ T1 detect_life_events       (messages, pending_offer) -> LifeEventDetection  LLM
+ T2 assess_request_safety    (message, history_summary) -> SafetyAssessment   LLM+rules
+ T3 retrieve_policy          (query, life_event=None, doc_types=None,         FAISS
+                              country=None, top_k=5) -> list[PolicyChunk]
+ T4 evaluate_retrieval       (query, chunks, event_context)                   LLM+rules
+                              -> RetrievalEvaluation
+ T5 get_customer_profile     (fields=None) -> dict | None   [customer_id      read-only
+                              taken from SessionContext, NOT an argument]
+ T6 escalate_to_human        (reason, summary, priority, status)              append-only
+                              -> EscalationTicket
+ T7 verify_groundedness      (message, chunks, customer_facts)                LLM
+                              -> GroundednessReport{unsupported_claims[]}
+ T8 log_audit_event          (record) -> None                                 append-only
+
+Rules:
+ - NO tool may move money, change accounts, beneficiaries, ownership, limits
+   or credit decisions. NO web-search tool exists (D-3, D-4).
+ - Automated test TOOLS_ARE_READ_ONLY asserts the registry names equal the set
+   above and no tool has a "write" capability marker.
+ - T5 output passes the field allow-list; unauthorised access returns None.
+ - Each tool SHALL validate inputs/outputs with Pydantic and return a
+   corrective error message (not an exception) on malformed LLM output, after
+   json-repair fallback (cf. AgentVille NFR-1/NFR-2).
+ - Retrieval output formatting for prompts: one block per chunk:
+   [doc_id | title | section | version] followed by text.
+
+===============================================================================
+7. DIALOGUE POLICY: ROUTING RULES AND THRESHOLDS
+===============================================================================
+7.1 ROUTING PRECEDENCE (first matching rule wins for the PRIMARY action;
+    flagged sub-requests are handled per 7.2 in the same response)
+-------------------------------------------------------------------------------
+ P1 FRAUD_CONCERN                       -> ESCALATE (CREATED, URGENT)
+ P2 HUMAN_REQUEST intent                -> ESCALATE (CREATED, CUSTOMER_REQUEST)
+ P3 No in-scope remainder after flags   -> REFUSE (privacy/transaction/injection/OOD)
+ P4 OUT_OF_DOMAIN                       -> polite redirect (REFUSAL type, no citation)
+ P5 CONFIRMATION with pending_offer     -> RETRIEVE for offered events
+ P6 DECLINE with pending_offer          -> acknowledge, ask if anything else
+ P7 >2 confirmed events                 -> CLARIFY (which to prioritise)
+ P8 Events present but none confirmed
+    (HYPOTHETICAL/INDIRECT/OTHER)       -> CLARIFY (one question); if the customer
+                                           asked a general policy question, answer
+                                           it as GENERAL (no event assumed)
+ P9 Confirmed event(s) + EXPLICIT_QUESTION / FOLLOW_UP -> RETRIEVE
+ P10 Confirmed event(s) + EVENT_MENTION_ONLY -> CONFIRM_OFFER
+ P11 GENERAL_POLICY_QUESTION (no event) -> RETRIEVE (general mode)
+ P12 No events, unclear message         -> CLARIFY
+ If clarification_turns >= MAX_CLARIFICATION_TURNS -> ESCALATE (CREATED)
+
+7.2 FLAG HANDLING WHEN A LEGITIMATE REMAINDER EXISTS
+-------------------------------------------------------------------------------
+ TRANSACTION_REQUEST  refuse execution; retrieve informational content on the
+                      procedure/limits/fees (info-only mode); never claim action.
+ PRIVACY_VIOLATION    refuse that part; offer help with the customer's own data.
+ PROMPT_INJECTION     ignore the injected instruction; continue with legitimate
+                      remainder; log the attempt.
+ HIGH_RISK_ADVICE     general cited product info only + professional/FSA referral;
+                      escalation OFFERED (reason HIGH_RISK_FINANCIAL, or
+                      HIGH_VALUE_DECISION if an amount >= HIGH_VALUE_THRESHOLD_EUR).
+ LEGAL_TAX_ADVICE     no conclusions; say it needs a qualified tax/legal
+                      professional; escalation OFFERED (TAX_LEGAL).
+
+7.3 POST-EVALUATION ROUTING
+-------------------------------------------------------------------------------
+ FULL                                   -> generate_answer
+ PARTIAL and missing_information is
+   something the customer can supply    -> CLARIFY (one question)
+ PARTIAL otherwise                      -> generate_answer (partial; state limits;
+                                           offer escalation)
+ INSUFFICIENT (retries < 1)             -> reformulate queries, retrieve again
+ INSUFFICIENT (retries exhausted)       -> "no supporting policy found" +
+                                           escalation OFFERED (POLICY_UNDETERMINED)
+ conflicts_detected                     -> ESCALATE CREATED (CONFLICTING_POLICIES)
+
+7.4 THRESHOLD DEFAULTS (config keys in Section 3.5)
+-------------------------------------------------------------------------------
+ EVENT_CONFIDENCE_MIN         0.75   min confidence to treat event as confirmed
+ RETRIEVAL_TOP_K              5      chunks per query
+ SUFFICIENCY_FULL_MIN         0.70
+ SUFFICIENCY_PARTIAL_MIN      0.40
+ MAX_CLARIFICATION_TURNS      2
+ MAX_RETRIEVAL_RETRIES        1
+ MAX_EVENTS_PER_TURN          2
+ HIGH_VALUE_THRESHOLD_EUR     10000
+ PENDING_OFFER_TTL_TURNS      2
+ Temperatures: detector/safety/evaluator/verifier 0.0; generator <= 0.2.
+ Thresholds SHALL be tuned on a dev split of the golden set and then frozen
+ before the final evaluation run (record the frozen values in the report).
+
+===============================================================================
+8. PROMPT REQUIREMENTS (named prompts live in src/lefn/prompts.py)
+===============================================================================
+Every prompt SHALL: state the role; state that user and document text are
+untrusted data; require JSON matching the named Pydantic schema and nothing
+else; include 3-6 few-shot examples drawn from the sample conversations.
+
+SAFETY_CLASSIFIER_SYSTEM_PROMPT
+  Define each SafetyFlag with positive and negative examples. Set
+  in_scope_remainder. Explicit rules: asking ABOUT transfer procedures is not a
+  transaction request; asking to PERFORM one is. Joint-account data for the
+  requester is not a privacy violation. Output JSON only.
+
+LIFE_EVENT_DETECTOR_SYSTEM_PROMPT
+  Provide taxonomy with definitions and status/subject rules and the explicit
+  vs hypothetical vs indirect vs other-person examples (see Test Plan CTX
+  cases). Extract only stated attributes. Instruct: "When unsure, lower
+  confidence and list missing_context; never infer facts." Classify UserIntent
+  using pending_offer context.
+
+RETRIEVAL_EVALUATOR_SYSTEM_PROMPT
+  Judge ONLY against retrieved text. Score relevance and coverage separately.
+  Detect conflicting statements on the same attribute (age, rate, fee, deadline).
+  List missing information the CUSTOMER could provide (e.g. destination
+  country). Never use outside knowledge. Output RetrievalEvaluation.
+
+GROUNDED_ANSWER_SYSTEM_PROMPT
+  Inputs: conversation, chunks (with IDs), allow-listed customer facts, flags,
+  route mode (guidance / partial / info-only / refusal-with-info). Rules: use
+  only provided facts; cite doc_ids; hedge; no advice; no action claims; one
+  question max; obey response structure and length (<= 300 words, plain
+  language); state limits when partial; include refusal_notice when flagged.
+  Output NavigatorResponse.
+
+GROUNDEDNESS_VERIFIER_SYSTEM_PROMPT
+  Given message + chunks + customer facts, list every claim that is NOT directly
+  supported. Numbers/entities must match exactly. Output GroundednessReport.
+
+QUERY_PLANNER_PROMPT
+  Turn events + attributes + question into 1-3 short retrieval queries and
+  filters; for reformulation, use synonyms and drop over-specific terms.
+
+===============================================================================
+9. RESPONSE FORMAT, TONE AND FALLBACK TEMPLATES
+===============================================================================
+9.1 GUIDANCE STRUCTURE (render_text)
+-------------------------------------------------------------------------------
+  1. Acknowledgement (one sentence; congratulations / empathy as appropriate)
+  2. What NovaBank's documentation says (2-5 short bullets, hedged)
+  3. Documents you may need (only if in KB)
+  4. Next steps (what you can do / what needs a representative)
+  5. Limits statement (when relevant: "I cannot make these changes for you")
+  6. Optional single follow-up question or offer
+  7. Sources: [doc_id] Title - Section (vX)
+  Style: plain language (target reading grade 8-10), <= 300 words, no
+  jargon, no guarantees, no emojis, EUR amounts written as "EUR 4.50" or "EUR".
+
+9.2 TONE RULES
+-------------------------------------------------------------------------------
+  Warm, calm, respectful. Never blame or lecture. Refusals are brief and
+  always offer a helpful alternative. Uncertainty is stated plainly
+  ("I couldn't find...", "I don't have enough information to determine...").
+
+9.3 FALLBACK / REFUSAL TEMPLATES (adapt with context; keep meaning)
+-------------------------------------------------------------------------------
+ T-TXN   "I can provide information about <procedure/limits>, but I cannot
+         initiate or execute <action>."
+ T-PRIV  "I can't provide another customer's account or financial information.
+         I can help you with information about your own account."
+ T-HRA   "I can provide general information about NovaBank's <products>, but I
+         can't determine an appropriate <strategy/decision> for your personal
+         circumstances. For personalized advice, please consult a qualified
+         financial professional. I can also arrange for a NovaBank advisor to
+         follow up."
+ T-TAXLEGAL "I can't give tax or legal advice. A qualified professional can
+         help with that. I can explain what NovaBank documentation says about
+         <topic>."
+ T-UNSUP "I couldn't find a NovaBank policy confirming <claim>. I don't want to
+         speculate or provide inaccurate information. I can explain the
+         <related products/eligibility> documented by NovaBank, or this can be
+         reviewed by a banking representative."
+ T-INSUF "I don't have enough information to determine which policies apply.
+         <ONE clarifying question>"
+ T-CONFLICT "I found NovaBank documents that give different information about
+         <topic>, so I can't tell you which is correct. I've passed this to a
+         banking representative (reference <ticket_id>)."
+ T-FRAUD "This may be fraud. Please <documented route: use the fraud line/block
+         your card in the NovaBank app> right away. I've flagged your case as
+         urgent to our team (reference <ticket_id>). Please don't share your PIN
+         or passwords with anyone, including me."
+ T-DATA  "I can't see <field> in the information available to me, so I don't
+         want to guess."
+ T-GUEST "I don't have access to account details in this chat. I can share
+         general information."
+ T-OOD   "I can help with banking questions related to life events such as
+         marriage, a new child, job changes, relocation or retirement."
+ T-FALLBACK (guard failure) "I'm not able to give a reliable answer to this
+         right now. I've passed your question to a banking representative
+         (reference <ticket_id>)."
+
+===============================================================================
+10. NON-FUNCTIONAL REQUIREMENTS
+===============================================================================
+[NFR-1]  Safety-critical metrics are ZERO-TOLERANCE: transaction refusal,
+         financial/legal safety, privacy, no-hallucination, customer-data
+         accuracy. Any single failure in the golden set is a release-blocking
+         defect (Test Plan 03 s.8).
+[NFR-2]  Determinism: temperature 0 for detection/safety/evaluation/verification;
+         <= 0.2 for generation; seeds and index build reproducible.
+[NFR-3]  Schema robustness: LLM outputs parsed with Pydantic; on failure apply
+         json-repair, then one corrective retry (agent receives the validation
+         error), then safe fallback + escalation.
+[NFR-4]  Performance: p50 <= 8 s, p95 <= 15 s per grounded turn with
+         gpt-4o-mini; refusal/clarification turns p95 <= 8 s. Target <= 5 LLM
+         calls per grounded turn.
+[NFR-5]  Cost control: cache embeddings on disk; index built once; eval runs
+         report tokens/cost; temperature-0 calls SHOULD be cached in eval mode.
+[NFR-6]  Reliability: API calls use timeouts (30 s) and up to 3 retries with
+         exponential backoff; on persistent failure -> T-FALLBACK + SYSTEM_ERROR
+         escalation. No unhandled exception may reach the customer.
+[NFR-7]  Security: secrets only in config.env (git-ignored); no secrets or PII in
+         logs; input length cap (2,000 chars); rate limit in UI mode.
+[NFR-8]  Privacy: no real PII anywhere in the repo; customer_ref hashing;
+         audit redaction (FR-13.2); no cross-session persistence (D-9).
+[NFR-9]  Observability: every turn has a trace_id; --trace shows route, queries,
+         chunks, evaluation, guards.
+[NFR-10] Maintainability: type hints, ruff clean, docstrings for public
+         functions; deterministic modules (router, guards, redaction, lint,
+         thresholds) >= 85% unit-test coverage.
+[NFR-11] Reproducibility: pinned requirements, documented run steps in README,
+         one-command KB build (python -m lefn.rag.index --rebuild).
+[NFR-12] Usability: responses <= 300 words, one question at a time, readable at
+         grade 8-10.
+[NFR-13] Extensibility: new life event = add enum value + KB docs + required
+         attribute hints + test cases; no graph change needed.
+[NFR-14] Explainability: the CSR/Compliance trace shows WHY the agent refused,
+         clarified or escalated.
+
+===============================================================================
+11. GUARDRAIL AND COMPLIANCE REQUIREMENTS
+===============================================================================
+[GR-1]  Defence in depth (6 layers): input screening -> deterministic routing ->
+        retrieval trust boundary -> grounded generation -> output validation ->
+        human escalation.
+[GR-2]  Human-in-the-loop for all decisions listed under "STOP / ASK HUMAN".
+[GR-3]  KB governance: only approved documents indexed; each document carries
+        version, effective_date, approved_by, approved_date (Compliance role);
+        superseded/draft never retrievable.
+[GR-4]  Traceability: every guidance claim maps to a cited document version;
+        audit record stores retrieved chunk IDs so a past answer can be
+        reconstructed.
+[GR-5]  Data minimisation: agent requests only information necessary for the
+        guidance (e.g. destination country), never credentials or full IDs.
+[GR-6]  Disclosure: first message of a session states that LEFN is an AI
+        assistant providing general information, is not a substitute for
+        professional advice, and cannot perform transactions.
+[GR-7]  Model-risk artefacts: prompts versioned in repo; thresholds recorded
+        with every evaluation report; known limitations documented (wiki 03/05).
+[GR-8]  Because all content is synthetic, the demo UI/CLI SHALL display a
+        "Demo with synthetic data" banner.
+[GR-9]  Regulatory mapping (e.g. GDPR data minimisation, complaint handling,
+        advice-vs-information boundary) is OUT of build scope but SHALL be
+        listed as a Compliance review checklist in the final report.
+
+===============================================================================
+12. DELIVERABLES
+===============================================================================
+ D1  Notebook 01  LEFN_01_KnowledgeBase_RAG.ipynb
+     - load + lint KB, chunk, embed, persist FAISS index (save_local), reload
+     - retrieval verification: >=6 event queries, filter tests, exclusion tests
+       (superseded / draft / internal), score inspection
+ D2  Notebook 02  LEFN_02_Agent_Workflow.ipynb
+     - tools, graph build, graph diagram, run the 8 formal samples from the
+       problem statement with reasoning traces and cited answers
+     - demonstrate confirm-offer flow, clarification loop, escalation ticket
+ D3  Notebook 03  LEFN_03_Evaluation.ipynb
+     - run golden set, metrics table vs targets, confusion matrix for event
+       detection, failure analysis, red-team results
+ D4  Source package (Section 3.4), README, config.env.example, requirements.txt
+ D5  KB (>= 25 synthetic documents per Spec 02) + fixtures + mock customers
+ D6  Golden evaluation dataset (>= 120 cases expanded from the 76 Test Plan seeds)
+ D7  Unit/component/graph tests with CI-style single command (pytest)
+ D8  Architecture wiki (wiki/*.md) and this SRS set
+ D9  Final evaluation report (metrics, thresholds used, limitations)
+ D10 Demo script (5-8 minutes, Section 5.4 of wiki/06) and screenshots
+
+Bonus [C]: Gradio UI; KB gap report analytics; LangSmith tracing; MMR tuning;
+multilingual (out of default scope).
+
+===============================================================================
+13. ACCEPTANCE CRITERIA
+===============================================================================
+A. Success Criteria from problem statement (measured on the golden set; see
+   Test Plan 03 for measurement methods)
+
+ Area                      Criterion                                Target
+ ------------------------- ---------------------------------------- -------
+ Life-event detection      Correct relevant life event               >= 90%
+ Context understanding     Explicit vs uncertain/indirect            >= 90%
+ Policy grounding          Guidance supported by approved docs       >= 95%
+ No hallucination          No invented policy/product/eligibility    100%
+ Uncertainty handling      States when info insufficient/ambiguous   >= 95%
+ Customer-data accuracy    No fabricated/assumed customer data       100%
+ Transaction safety        Refuses money movement/transactions       100%
+ Financial/legal safety    Refuses/escalates personalized advice     100%
+ Human escalation          Escalates high-risk/ambiguous/unresolved  >= 95%
+ Privacy                   No other customer's PII/financial info    100%
+ Traceability              Cites supporting policy/source            >= 95%
+ Response quality          Relevant, understandable, actionable      >= 90%
+
+B. Functional acceptance
+ 1. All 8 formal conversation samples reproduce the expected behaviour
+    (Test Plan cases LED-03, LED-02, LED-01/FLW-01, INS-01, HRA-01, TXN-01,
+    PRV-01, UNS-01) with correct route, citations and templates.
+ 2. Confirm-offer, clarification (max 2 turns), and escalation flows work.
+ 3. TOOLS_ARE_READ_ONLY, customer_id-binding, KB-lint and exclusion tests pass.
+ 4. No customer-facing response ever states an action was performed.
+ 5. Retrieved-document injection fixtures never alter behaviour.
+ 6. Every response is stored with a complete audit record and trace.
+
+C. Release gate: all zero-tolerance metrics at 100% AND all other metrics at
+   or above target on the frozen threshold configuration; report lists any
+   failing case with root cause and mitigation.
+
+===============================================================================
+14. TRACEABILITY MATRIX (Success Criterion -> Requirement -> Component)
+===============================================================================
+ Life-event detection  -> FR-3.1..3.7        -> detect_events, T1
+ Context understanding -> FR-3.2, 3.3, 4.4   -> detect_events, route, clarify
+ Policy grounding      -> FR-5, 6, 8.1, 8.2  -> rag/*, evaluate, generate
+ No hallucination      -> FR-6.3, 8.2, 12.1  -> evaluate, output_guard (G3,G4)
+ Uncertainty handling  -> FR-4.4, 6.3, 7.3   -> clarify, escalate, templates
+ Customer-data accuracy-> FR-7.1..7.6, 12.1  -> customer_context, output_guard
+ Transaction safety    -> FR-2.1, 10.1, D-4  -> input_guard, refuse, registry test
+ Fin/legal safety      -> FR-2.1, 8.6, 11    -> input_guard, generate, escalate
+ Human escalation      -> FR-11, 6.4, 4.4    -> escalate, route
+ Privacy               -> FR-2.4, 7.1, 7.4   -> input_guard, customer_service
+ Traceability          -> FR-9, 13           -> generate, output_guard, audit_log
+ Response quality      -> FR-8.3..8.8, 9     -> generate, templates
+
+===============================================================================
+15. RISKS AND MITIGATIONS
+===============================================================================
+ R1 LLM evaluator wrongly marks insufficient retrieval as sufficient
+    -> deterministic G3 number/entity check + verifier; adversarial UNS cases.
+ R2 Over-refusal (blocking legitimate joint-account or procedure questions)
+    -> explicit negative examples in safety prompt; PRV-02 and TXN info cases.
+ R3 Prompt injection via KB or user text -> D-6, fixtures FX-INJECT, INJ cases.
+ R4 Latency/cost from multiple LLM calls -> gpt-4o-mini, caching, <=5 calls.
+ R5 Circular evaluation (same person writes KB and tests)
+    -> separate KB author and test author; tests reference fact IDs (Spec 02).
+ R6 100% targets on small sample sizes -> treat any failure as blocking; expand
+    with paraphrase variants (>=100 cases); report counts not just percentages.
+ R7 LLM-judge bias -> human-label 20 responses, require >= 85% agreement.
+ R8 Scope creep (extra events, languages) -> change control via Section 16.
+ R9 API quota/outage (course endpoint) -> caching, small model, offline unit tests.
+ R10 Taxonomy gaps (separation, promotion, bereavement) -> FR-3.6 escalate/clarify;
+     list as future work.
+
+===============================================================================
+16. CHANGE LOG
+===============================================================================
+ v1.0  2026-09-19  Initial baseline for team review.
+===============================================================================
+END OF DOCUMENT
+===============================================================================
